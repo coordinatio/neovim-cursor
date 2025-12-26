@@ -1,5 +1,7 @@
 # neovim-cursor
 
+**BIG DISCLAIMER**: This is not a _real_ plugin in the `neovim` sense of a plugin. It's just a way to integrate `cursor-cli` into the `neovim` editor. So whenever you read that it's a "plugin" , just read it as "terminal integration" (or something like that).
+
 A Neovim plugin to integrate the Cursor AI agent CLI directly into your editor. Toggle a terminal running `cursor agent`
 with a simple keybinding and send visual selections for AI assistance.
 
