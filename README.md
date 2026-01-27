@@ -2,15 +2,15 @@
 
 **BIG DISCLAIMER**: This is not a _real_ plugin in the `neovim` sense of a plugin. It's just a way to integrate `cursor-cli` into the `neovim` editor. So whenever you read that it's a "plugin" , just read it as "terminal integration" (or something like that).
 
-A Neovim plugin to integrate the Cursor AI agent CLI directly into your editor. Toggle a terminal running `cursor agent`
-with a simple keybinding and send visual selections for AI assistance.
+A Neovim plugin to integrate the Cursor AI agent CLI directly into your editor. Toggle a terminal running the agent CLI
+(`cursor-agent` or `cursor agent`) with a simple keybinding and send visual selections for AI assistance.
 
-This was created using cursor 😊 in 20 minutes, it doesn't have to be perfect, just need something to run cursor agent like the agent inside cursor.
+This was created using Cursor in ~20 minutes; it doesn't have to be perfect, just needs something to run the Cursor agent CLI like the agent inside Cursor.
 
 
 ## Features
 
-- 🚀 Toggle a vertical split terminal running `cursor agent` with `<leader>ai`
+- 🚀 Toggle a vertical split terminal running the Cursor agent CLI with `<leader>ai`
 - 🎛️ **Manage multiple AI agent sessions simultaneously**
 - 🔍 **Fuzzy finder with live preview** (Telescope integration)
 - ✏️ **Rename and organize** agent terminals for different tasks
@@ -24,7 +24,9 @@ This was created using cursor 😊 in 20 minutes, it doesn't have to be perfect,
 ## Requirements
 
 - Neovim >= 0.8.0
-- `cursor` CLI installed and available in your PATH
+- Cursor agent CLI available in your `PATH`:
+  - Preferably `cursor-agent` (common on Linux, and avoids launching the GUI)
+  - Or `cursor` with `cursor agent` support
 
 
 ## Installation
@@ -186,6 +188,8 @@ require("neovim-cursor").setup({
 })
 ```
 
+> **Note (Linux / GUI launcher):** If `cursor-agent` is in your `PATH`, the plugin will automatically prefer it unless you explicitly set `command`.
+
 ### Custom Configuration Examples
 
 #### Custom Keybindings
@@ -228,6 +232,18 @@ require("neovim-cursor").setup({
 ```lua
 require("neovim-cursor").setup({
   command = "cursor agent --model gpt-4",
+})
+```
+
+#### Linux / `cursor-agent` binary
+
+On some systems `cursor` launches the GUI app and the agent CLI is provided as `cursor-agent`.
+If `cursor-agent` is in your `PATH`, the plugin will prefer it automatically. You can also
+set it explicitly:
+
+```lua
+require("neovim-cursor").setup({
+  command = "cursor-agent",
 })
 ```
 
@@ -335,8 +351,8 @@ Without Telescope, the plugin falls back to `vim.ui.select` (still functional, j
 
 ### Terminal doesn't open
 
-- Ensure the `cursor` CLI is installed and in your PATH
-- Try running `cursor agent` manually in your terminal to verify it works
+- Ensure the Cursor agent CLI is installed and in your PATH
+- Try running `cursor-agent` (preferred) or `cursor agent` manually in your terminal to verify it works
 - Check for errors with `:messages`
 
 ### Keybinding doesn't work

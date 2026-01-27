@@ -47,7 +47,15 @@ function M.setup(user_config)
     }
   end
   
-  return vim.tbl_deep_extend("force", M.defaults, user_config)
+  local cfg = vim.tbl_deep_extend("force", M.defaults, user_config)
+
+  -- If the user didn't explicitly set a command, prefer the dedicated CLI binary
+  -- when it exists (common packaging: GUI launcher is `cursor`, CLI is `cursor-agent`).
+  if user_config.command == nil and vim.fn.executable("cursor-agent") == 1 then
+    cfg.command = "cursor-agent"
+  end
+
+  return cfg
 end
 
 return M
