@@ -98,6 +98,8 @@ When you're inside an agent terminal, you can manage agents without leaving:
 | `<C-t>` | Select agent from fuzzy picker |
 | `<C-r>` | Rename current agent terminal |
 
+> **Note:** All terminal mode keybindings are configurable via `terminal_keybindings` option (see Configuration section).
+
 #### Example Workflow
 
 ```
@@ -185,6 +187,15 @@ require("neovim-cursor").setup({
       print("Cursor agent exited with code: " .. exit_code)
     end,
   },
+
+  -- Terminal mode keybindings (when inside terminal buffer)
+  terminal_keybindings = {
+    exit = "<Esc>",      -- Exit terminal window (terminal mode)
+    hide = "<Esc>",      -- Hide terminal window (normal mode in terminal)
+    new = "<C-n>",       -- Create new agent terminal
+    rename = "<C-r>",    -- Rename current agent terminal
+    select = "<C-t>",    -- Select agent terminal
+  },
 })
 ```
 
@@ -244,6 +255,22 @@ set it explicitly:
 ```lua
 require("neovim-cursor").setup({
   command = "cursor-agent",
+})
+```
+
+#### Custom Terminal Mode Keybindings
+
+You can customize keybindings used when inside a terminal buffer:
+
+```lua
+require("neovim-cursor").setup({
+  terminal_keybindings = {
+    exit = "<C-x>",      -- Use Ctrl+x to exit terminal
+    hide = "<C-h>",      -- Use Ctrl+h to hide terminal
+    new = "<leader>n",   -- Use <leader>n for new terminal
+    rename = "<leader>r", -- Use <leader>r for rename
+    select = "<leader>t", -- Use <leader>t for select
+  },
 })
 ```
 
