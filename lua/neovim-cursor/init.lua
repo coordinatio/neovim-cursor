@@ -193,40 +193,48 @@ function M.setup(user_config)
     rename = "<leader>ar",
   }
 
-  -- Set up keybindings for toggle
-  vim.keymap.set("n", keybindings.toggle, M.normal_mode_handler, {
-    desc = "Toggle Cursor Agent terminal",
-    silent = true,
-  })
+  -- Set up keybindings for toggle (skip if binding is empty string)
+  if keybindings.toggle and keybindings.toggle ~= "" then
+    vim.keymap.set("n", keybindings.toggle, M.normal_mode_handler, {
+      desc = "Toggle Cursor Agent terminal",
+      silent = true,
+    })
 
-  vim.keymap.set("v", keybindings.toggle, function()
-    -- Exit visual mode before processing
-    local esc = vim.api.nvim_replace_termcodes("<Esc>", true, false, true)
-    vim.api.nvim_feedkeys(esc, "x", false)
-    -- Call handler after exiting visual mode
-    vim.schedule(M.visual_mode_handler)
-  end, {
-    desc = "Toggle Cursor Agent terminal and send selection",
-    silent = true,
-  })
+    vim.keymap.set("v", keybindings.toggle, function()
+      -- Exit visual mode before processing
+      local esc = vim.api.nvim_replace_termcodes("<Esc>", true, false, true)
+      vim.api.nvim_feedkeys(esc, "x", false)
+      -- Call handler after exiting visual mode
+      vim.schedule(M.visual_mode_handler)
+    end, {
+      desc = "Toggle Cursor Agent terminal and send selection",
+      silent = true,
+    })
+  end
 
   -- Keybinding for creating a new terminal
-  vim.keymap.set("n", keybindings.new, M.new_terminal_handler, {
-    desc = "Create new Cursor Agent terminal",
-    silent = true,
-  })
+  if keybindings.new and keybindings.new ~= "" then
+    vim.keymap.set("n", keybindings.new, M.new_terminal_handler, {
+      desc = "Create new Cursor Agent terminal",
+      silent = true,
+    })
+  end
 
   -- Keybinding for selecting a terminal
-  vim.keymap.set("n", keybindings.select, M.select_terminal_handler, {
-    desc = "Select Cursor Agent terminal",
-    silent = true,
-  })
+  if keybindings.select and keybindings.select ~= "" then
+    vim.keymap.set("n", keybindings.select, M.select_terminal_handler, {
+      desc = "Select Cursor Agent terminal",
+      silent = true,
+    })
+  end
 
   -- Keybinding for renaming a terminal
-  vim.keymap.set("n", keybindings.rename, M.rename_terminal_handler, {
-    desc = "Rename Cursor Agent terminal",
-    silent = true,
-  })
+  if keybindings.rename and keybindings.rename ~= "" then
+    vim.keymap.set("n", keybindings.rename, M.rename_terminal_handler, {
+      desc = "Rename Cursor Agent terminal",
+      silent = true,
+    })
+  end
 
   -- Create user command for toggle
   vim.api.nvim_create_user_command("CursorAgent", function()

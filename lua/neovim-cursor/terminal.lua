@@ -184,41 +184,50 @@ local function create_terminal_instance(id, config)
     select = "<C-t>",
   }
 
-  -- Set up buffer-local keymaps for terminal mode
-  vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.exit, '<C-\\><C-n>:lua require("neovim-cursor.terminal").hide()<CR>', {
-    noremap = true,
-    silent = true,
-    desc = "Exit terminal window"
-  })
+  -- Set up buffer-local keymaps for terminal mode (skip if binding is empty string)
+  if term_keys.exit and term_keys.exit ~= "" then
+    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.exit, '<C-\\><C-n>:lua require("neovim-cursor.terminal").hide()<CR>', {
+      noremap = true,
+      silent = true,
+      desc = "Exit terminal window"
+    })
+  end
 
   -- Set up buffer-local keymap for normal mode in terminal
-  vim.api.nvim_buf_set_keymap(term.buf, 'n', term_keys.hide, ':lua require("neovim-cursor.terminal").hide()<CR>', {
-    noremap = true,
-    silent = true,
-    desc = "Hide terminal window"
-  })
+  if term_keys.hide and term_keys.hide ~= "" then
+    vim.api.nvim_buf_set_keymap(term.buf, 'n', term_keys.hide, ':lua require("neovim-cursor.terminal").hide()<CR>', {
+      noremap = true,
+      silent = true,
+      desc = "Hide terminal window"
+    })
+  end
 
   -- Set up buffer-local keymap for creating new terminal from terminal mode
-  -- First hide current terminal, then create new one
-  vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.new, '<C-\\><C-n>:lua require("neovim-cursor").new_terminal_from_terminal_handler()<CR>', {
-    noremap = true,
-    silent = true,
-    desc = "Create new agent terminal (hide current first)"
-  })
+  if term_keys.new and term_keys.new ~= "" then
+    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.new, '<C-\\><C-n>:lua require("neovim-cursor").new_terminal_from_terminal_handler()<CR>', {
+      noremap = true,
+      silent = true,
+      desc = "Create new agent terminal (hide current first)"
+    })
+  end
 
   -- Set up buffer-local keymap for renaming current terminal from terminal mode
-  vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.rename, '<C-\\><C-n>:lua require("neovim-cursor").rename_terminal_handler()<CR>', {
-    noremap = true,
-    silent = true,
-    desc = "Rename current agent window"
-  })
+  if term_keys.rename and term_keys.rename ~= "" then
+    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.rename, '<C-\\><C-n>:lua require("neovim-cursor").rename_terminal_handler()<CR>', {
+      noremap = true,
+      silent = true,
+      desc = "Rename current agent window"
+    })
+  end
 
   -- Set up buffer-local keymap for selecting terminal from terminal mode
-  vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.select, '<C-\\><C-n>:lua require("neovim-cursor").select_terminal_handler()<CR>', {
-    noremap = true,
-    silent = true,
-    desc = "Select agent terminal"
-  })
+  if term_keys.select and term_keys.select ~= "" then
+    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.select, '<C-\\><C-n>:lua require("neovim-cursor").select_terminal_handler()<CR>', {
+      noremap = true,
+      silent = true,
+      desc = "Select agent terminal"
+    })
+  end
 
   -- Enter insert mode in terminal
   vim.cmd("startinsert")
