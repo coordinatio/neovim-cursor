@@ -190,8 +190,7 @@ require("neovim-cursor").setup({
 
   -- Terminal mode keybindings (when inside terminal buffer)
   terminal_keybindings = {
-    exit = "<Esc>",      -- Exit terminal window (terminal mode)
-    hide = "<Esc>",      -- Hide terminal window (normal mode in terminal)
+    hide = "<Esc>",      -- Hide terminal window (terminal + normal mode in terminal)
     new = "<C-n>",       -- Create new agent terminal
     rename = "<C-r>",    -- Rename current agent terminal
     select = "<C-t>",    -- Select agent terminal
@@ -265,7 +264,6 @@ You can customize keybindings used when inside a terminal buffer:
 ```lua
 require("neovim-cursor").setup({
   terminal_keybindings = {
-    exit = "<C-x>",      -- Use Ctrl+x to exit terminal
     hide = "<C-h>",      -- Use Ctrl+h to hide terminal
     new = "<leader>n",   -- Use <leader>n for new terminal
     rename = "<leader>r", -- Use <leader>r for rename

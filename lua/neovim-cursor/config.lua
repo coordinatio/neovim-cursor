@@ -36,8 +36,7 @@ M.defaults = {
 
   -- Terminal mode keybindings (when inside terminal buffer)
   terminal_keybindings = {
-    exit = "<Esc>",      -- Exit terminal window (terminal mode)
-    hide = "<Esc>",      -- Hide terminal window (normal mode in terminal)
+    hide = "<Esc>",      -- Hide terminal window (terminal + normal mode in terminal)
     new = "<C-n>",       -- Create new agent terminal
     rename = "<C-r>",    -- Rename current agent window
     select = "<C-t>",    -- Select agent terminal

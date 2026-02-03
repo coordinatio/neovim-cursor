@@ -176,20 +176,27 @@ local function create_terminal_instance(id, config)
   })
 
   -- Get terminal keybindings from config (with defaults)
-  local term_keys = config.terminal_keybindings or {
-    exit = "<Esc>",
+  local term_keys = vim.tbl_deep_extend("force", {
     hide = "<Esc>",
     new = "<C-n>",
     rename = "<C-r>",
     select = "<C-t>",
-  }
+  }, config.terminal_keybindings or {})
+
+  -- Backward compatibility: if someone only set `exit`, treat it as `hide`.
+  if (term_keys.hide == nil or term_keys.hide == "") and term_keys.exit and term_keys.exit ~= "" then
+    term_keys.hide = term_keys.exit
+  end
+
+  -- Always use one key for both actions.
+  term_keys.exit = term_keys.hide
 
   -- Set up buffer-local keymaps for terminal mode (skip if binding is empty string)
   if term_keys.exit and term_keys.exit ~= "" then
     vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.exit, '<C-\\><C-n>:lua require("neovim-cursor.terminal").hide()<CR>', {
       noremap = true,
       silent = true,
-      desc = "Exit terminal window"
+      desc = "Hide terminal window"
     })
   end
 
