@@ -181,6 +181,29 @@ function M.visual_mode_handler()
   end, 100)  -- 100ms delay to ensure terminal is ready
 end
 
+-- Copy Cursor-style @file:start-end link to clipboard (system clipboard register +).
+-- Used from visual mode (range from '< and '>) or from command (range from opts or current line).
+local function copy_range_link_to_clipboard(filepath, start_line, end_line)
+  if not filepath or filepath == "" then
+    vim.notify("No file path (buffer not saved?)", vim.log.levels.WARN)
+    return
+  end
+  local link = "@" .. filepath .. ":" .. start_line .. "-" .. end_line
+  vim.fn.setreg("+", link)
+  vim.notify("Copied to clipboard: " .. link, vim.log.levels.INFO)
+end
+
+-- Handler: copy link for last visual selection to clipboard (call after exiting visual mode).
+function M.copy_link_handler()
+  local buf = vim.api.nvim_get_current_buf()
+  local filepath = vim.api.nvim_buf_get_name(buf)
+  local start_pos = vim.fn.getpos("'<")
+  local end_pos = vim.fn.getpos("'>")
+  local start_line = start_pos[2]
+  local end_line = end_pos[2]
+  copy_range_link_to_clipboard(filepath, start_line, end_line)
+end
+
 -- Setup function to initialize the plugin
 function M.setup(user_config)
   -- Merge user config with defaults
@@ -194,6 +217,7 @@ function M.setup(user_config)
     rename = "<leader>ar",
     prompt_new = "<leader>ah",
     prompt_send = "<leader>ae",
+    copy_link = "<leader>ac",
   }
 
   -- Set up keybindings for toggle (skip if binding is empty string)
@@ -255,6 +279,18 @@ function M.setup(user_config)
       history.send_prompt_file_to_agent(config)
     end, {
       desc = "Send current file to Cursor Agent (complete task in file)",
+      silent = true,
+    })
+  end
+
+  -- Keybinding for copying @file:start-end link to clipboard (visual mode)
+  if keybindings.copy_link and keybindings.copy_link ~= "" then
+    vim.keymap.set("v", keybindings.copy_link, function()
+      local esc = vim.api.nvim_replace_termcodes("<Esc>", true, false, true)
+      vim.api.nvim_feedkeys(esc, "x", false)
+      vim.schedule(M.copy_link_handler)
+    end, {
+      desc = "Copy Cursor @file:start-end link to clipboard",
       silent = true,
     })
   end
@@ -323,6 +359,18 @@ function M.setup(user_config)
     history.send_prompt_file_to_agent(config)
   end, {
     desc = "Send current file to Cursor Agent: @path + 'Complete the task described in this file.'",
+  })
+
+  -- Create command to copy @file:start-end link to clipboard (range or current line)
+  vim.api.nvim_create_user_command("CursorAgentCopyLink", function(opts)
+    local buf = vim.api.nvim_get_current_buf()
+    local filepath = vim.api.nvim_buf_get_name(buf)
+    local line1 = opts.line1 or vim.api.nvim_win_get_cursor(0)[1]
+    local line2 = opts.line2 or line1
+    copy_range_link_to_clipboard(filepath, line1, line2)
+  end, {
+    desc = "Copy Cursor @file:start-end link to clipboard (for prompt); range or current line",
+    range = true,
   })
 
   -- Create command to send text manually

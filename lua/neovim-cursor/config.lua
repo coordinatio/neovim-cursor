@@ -13,6 +13,7 @@ M.defaults = {
     rename = "<leader>ar",       -- Rename current agent terminal
     prompt_new = "<leader>ah",   -- Create new prompt file in .nvim-cursor/history
     prompt_send = "<leader>ae",  -- Send current file to agent with "Complete the task..."
+    copy_link = "<leader>ac",    -- Copy @file:start-end link to clipboard (for Cursor prompt)
   },
 
   -- Prompt history (md files for cursor-agent tasks)

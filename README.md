@@ -16,6 +16,7 @@ This was created using Cursor in ~20 minutes; it doesn't have to be perfect, jus
 - ✏️ **Rename and organize** agent terminals for different tasks
 - ⌨️ **Full terminal mode support** - manage agents without leaving the terminal
 - 📝 Send visual selections and file paths to the Cursor agent
+- 📎 Copy `@file:start-end` link to clipboard for pasting into Cursor prompts
 - 💾 Persistent terminal sessions (hide/show without restarting)
 - ⚙️ Fully configurable (keybindings, split position, size, etc.)
 - 🎯 Written in pure Lua
@@ -89,6 +90,12 @@ Work with multiple AI agents simultaneously for different tasks:
 | `<leader>ah` | Create new prompt file in `.nvim-cursor/history/` (timestamp in filename) |
 | `<leader>ae` | Send current file to agent: `@path` + "Complete the task described in this file." |
 
+#### From Visual Mode
+
+| Keybinding | Action |
+|------------|--------|
+| `<leader>ac` | Copy `@file:start-end` link to clipboard (paste into Cursor prompt) |
+
 #### From Terminal Mode
 
 When you're inside an agent terminal, you can manage agents without leaving:
@@ -117,7 +124,7 @@ When you're inside an agent terminal, you can manage agents without leaving:
 
 ### Visual Mode
 
-Send code selections to your active agent:
+**Send code selections to your active agent:**
 
 1. Select text in visual mode (v, V, or Ctrl-v)
 2. Press `<leader>ai`
@@ -131,6 +138,15 @@ Example:
 ```
 
 The agent will have context about which file and lines you're referring to.
+
+**Copy link to clipboard (for pasting into a Cursor prompt elsewhere):**
+
+1. Select lines in visual mode (V or Ctrl-v)
+2. Press `<leader>ac`
+3. The link `@path/to/file:start-end` is copied to the system clipboard
+4. Switch to the buffer where you're composing a Cursor prompt and paste (Ctrl+V)
+
+Use this when you want to reference a line range in a prompt without sending it to the agent terminal immediately.
 
 ### Prompt history workflow
 
@@ -159,11 +175,12 @@ The plugin provides comprehensive commands for all operations:
 - `:CursorAgentPromptNew` - Create new prompt file in `.nvim-cursor/history/` (timestamp in filename)
 - `:CursorAgentPromptSend` - Send current file to agent: `@path` + "Complete the task described in this file."
 
-> **Note:** To close an agent terminal, simply type `exit` in the terminal or press `Ctrl+D`
-
 #### Utilities
+- `:CursorAgentCopyLink [range]` - Copy `@file:start-end` link to clipboard; use range (e.g. `:10,20CursorAgentCopyLink`) or current line
 - `:CursorAgentSend <text>` - Send arbitrary text to active agent
 - `:CursorAgentVersion` - Display plugin version
+
+> **Note:** To close an agent terminal, simply type `exit` in the terminal or press `Ctrl+D`
 
 ## Configuration
 
@@ -177,8 +194,9 @@ require("neovim-cursor").setup({
     new = "<leader>an",          -- Create new agent terminal
     select = "<leader>at",       -- Select agent terminal (fuzzy picker)
     rename = "<leader>ar",       -- Rename current agent terminal
-    prompt_new = "<leader>ah",  -- Create new prompt file in .nvim-cursor/history
+    prompt_new = "<leader>ah",   -- Create new prompt file in .nvim-cursor/history
     prompt_send = "<leader>ae", -- Send current file to agent (complete task in file)
+    copy_link = "<leader>ac",    -- Copy @file:start-end link to clipboard (visual mode)
   },
 
   history = {
@@ -235,6 +253,7 @@ require("neovim-cursor").setup({
     new = "<C-n>",          -- Use Ctrl+n for new terminal
     select = "<C-s>",       -- Use Ctrl+s for select
     rename = "<leader>rn",  -- Use <leader>rn for rename
+    copy_link = "<leader>ac", -- Copy link in visual mode (use "" to disable)
   },
 })
 ```
