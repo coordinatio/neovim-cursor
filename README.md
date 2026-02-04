@@ -17,6 +17,9 @@ This was created using Cursor in ~20 minutes; it doesn't have to be perfect, jus
 - ⌨️ **Full terminal mode support** - manage agents without leaving the terminal
 - 📝 Send visual selections and file paths to the Cursor agent
 - 📎 Copy `@file:start-end` link to clipboard for pasting into Cursor prompts
+- 📂 **Prompt history in Telescope** – browse `.nvim-cursor/history/` with Telescope
+- 📄 **Last prompt buffer** – open or switch to the most recent prompt file
+- 🆕 **Send to new agent** – send current file to a fresh agent (like new + prompt_send)
 - 💾 Persistent terminal sessions (hide/show without restarting)
 - ⚙️ Fully configurable (keybindings, split position, size, etc.)
 - 🎯 Written in pure Lua
@@ -89,6 +92,9 @@ Work with multiple AI agents simultaneously for different tasks:
 | `<leader>ar` | Rename current agent terminal |
 | `<leader>ah` | Create new prompt file in `.nvim-cursor/history/` (timestamp in filename) |
 | `<leader>ae` | Send current file to agent: `@path` + "Complete the task described in this file." |
+| `<leader>aE` | Send current file to a **new** agent (create new instance + send task) |
+| `<leader>aH` | Open prompt history directory in Telescope (requires telescope.nvim) |
+| `<leader>al` | Open or switch to last prompt file from history |
 
 #### From Visual Mode
 
@@ -160,6 +166,15 @@ Create a markdown file for a cursor-agent task and send it in one go:
    - Saves the buffer if modified
    - Shows/creates the agent terminal and sends: `@<path>\nComplete the task described in this file.\n`
 
+**Additional prompt history actions:**
+
+- **Browse history in Telescope**: `:CursorAgentHistoryTelescope` or `<leader>aH`  
+  Opens the prompt history directory in Telescope’s file finder (requires [telescope.nvim](https://github.com/nvim-telescope/telescope.nvim)).
+- **Open last prompt**: `:CursorAgentPromptLast` or `<leader>al`  
+  Opens or switches to the buffer of the most recent prompt file (by timestamp in filename).
+- **Send to new agent**: `:CursorAgentPromptSendNew` or `<leader>aE`  
+  Same as prompt_send but creates a new agent terminal first (like `CursorAgentNew`), then sends the current file.
+
 ### Commands
 
 The plugin provides comprehensive commands for all operations:
@@ -174,6 +189,9 @@ The plugin provides comprehensive commands for all operations:
 #### Prompt history
 - `:CursorAgentPromptNew` - Create new prompt file in `.nvim-cursor/history/` (timestamp in filename)
 - `:CursorAgentPromptSend` - Send current file to agent: `@path` + "Complete the task described in this file."
+- `:CursorAgentPromptSendNew` - Create new agent and send current file (like new + prompt_send)
+- `:CursorAgentHistoryTelescope` - Open prompt history directory in Telescope
+- `:CursorAgentPromptLast` - Open or switch to last prompt file from history
 
 #### Utilities
 - `:CursorAgentCopyLink [range]` - Copy `@file:start-end` link to clipboard; use range (e.g. `:10,20CursorAgentCopyLink`) or current line
@@ -190,13 +208,16 @@ The plugin provides comprehensive commands for all operations:
 require("neovim-cursor").setup({
   -- Multi-terminal keybindings (all configurable)
   keybindings = {
-    toggle = "<leader>ai",      -- Toggle agent window (show last active)
-    new = "<leader>an",          -- Create new agent terminal
-    select = "<leader>at",       -- Select agent terminal (fuzzy picker)
-    rename = "<leader>ar",       -- Rename current agent terminal
-    prompt_new = "<leader>ah",   -- Create new prompt file in .nvim-cursor/history
-    prompt_send = "<leader>ae", -- Send current file to agent (complete task in file)
-    copy_link = "<leader>ac",    -- Copy @file:start-end link to clipboard (visual mode)
+    toggle = "<leader>ai",           -- Toggle agent window (show last active)
+    new = "<leader>an",              -- Create new agent terminal
+    select = "<leader>at",           -- Select agent terminal (fuzzy picker)
+    rename = "<leader>ar",           -- Rename current agent terminal
+    prompt_new = "<leader>ah",       -- Create new prompt file in .nvim-cursor/history
+    prompt_send = "<leader>ae",      -- Send current file to agent (complete task in file)
+    prompt_send_new = "<leader>aE",  -- Send current file to a new agent
+    prompt_history_telescope = "<leader>aH",  -- Open prompt history in Telescope
+    prompt_last = "<leader>al",      -- Open or switch to last prompt buffer
+    copy_link = "<leader>ac",        -- Copy @file:start-end link to clipboard (visual mode)
   },
 
   history = {
@@ -408,12 +429,11 @@ Use descriptive names to organize agents by task:
 
 ### Telescope Integration
 
-For the best experience, install [telescope.nvim](https://github.com/nvim-telescope/telescope.nvim). The picker will:
-- Show live preview of agent conversations
-- Support fuzzy searching by agent name
-- Allow renaming directly from the picker with `<C-r>`
+For the best experience, install [telescope.nvim](https://github.com/nvim-telescope/telescope.nvim). With Telescope you get:
+- **Agent picker** (`<leader>at`): live preview of agent conversations, fuzzy search by name, rename with `<C-r>`
+- **Prompt history** (`<leader>aH`): browse `.nvim-cursor/history/` with `find_files` in that directory
 
-Without Telescope, the plugin falls back to `vim.ui.select` (still functional, just less features).
+Without Telescope, the agent picker falls back to `vim.ui.select` (still functional, just less features). The prompt history command will show a warning if Telescope is not available.
 
 ## Troubleshooting
 

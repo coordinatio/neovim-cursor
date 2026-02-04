@@ -7,13 +7,16 @@ M.defaults = {
 
   -- Multi-terminal keybindings
   keybindings = {
-    toggle = "<leader>ai",      -- Toggle agent window (show last active)
-    new = "<leader>an",          -- Create new agent terminal
-    select = "<leader>at",       -- Select agent terminal (fuzzy picker)
-    rename = "<leader>ar",       -- Rename current agent terminal
-    prompt_new = "<leader>ah",   -- Create new prompt file in .nvim-cursor/history
-    prompt_send = "<leader>ae",  -- Send current file to agent with "Complete the task..."
-    copy_link = "<leader>ac",    -- Copy @file:start-end link to clipboard (for Cursor prompt)
+    toggle = "<leader>ai",           -- Toggle agent window (show last active)
+    new = "<leader>an",              -- Create new agent terminal
+    select = "<leader>at",           -- Select agent terminal (fuzzy picker)
+    rename = "<leader>ar",           -- Rename current agent terminal
+    prompt_new = "<leader>ah",       -- Create new prompt file in .nvim-cursor/history
+    prompt_send = "<leader>ae",      -- Send current file to agent with "Complete the task..."
+    prompt_send_new = "<leader>aE",  -- Send current file to a new agent (like new + prompt_send)
+    prompt_history_telescope = "<leader>aH",  -- Open prompt history dir in Telescope
+    prompt_last = "<leader>al",      -- Open or switch to last prompt buffer
+    copy_link = "<leader>ac",        -- Copy @file:start-end link to clipboard (for Cursor prompt)
   },
 
   -- Prompt history (md files for cursor-agent tasks)

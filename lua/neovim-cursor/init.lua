@@ -217,6 +217,9 @@ function M.setup(user_config)
     rename = "<leader>ar",
     prompt_new = "<leader>ah",
     prompt_send = "<leader>ae",
+    prompt_send_new = "<leader>aE",
+    prompt_history_telescope = "<leader>aH",
+    prompt_last = "<leader>al",
     copy_link = "<leader>ac",
   }
 
@@ -279,6 +282,36 @@ function M.setup(user_config)
       history.send_prompt_file_to_agent(config)
     end, {
       desc = "Send current file to Cursor Agent (complete task in file)",
+      silent = true,
+    })
+  end
+
+  -- Keybinding for sending current file to a new agent
+  if keybindings.prompt_send_new and keybindings.prompt_send_new ~= "" then
+    vim.keymap.set("n", keybindings.prompt_send_new, function()
+      history.send_prompt_file_to_new_agent(config)
+    end, {
+      desc = "Send current file to new Cursor Agent (new instance + complete task)",
+      silent = true,
+    })
+  end
+
+  -- Keybinding for opening prompt history in Telescope
+  if keybindings.prompt_history_telescope and keybindings.prompt_history_telescope ~= "" then
+    vim.keymap.set("n", keybindings.prompt_history_telescope, function()
+      history.open_history_in_telescope(config)
+    end, {
+      desc = "Open prompt history directory in Telescope",
+      silent = true,
+    })
+  end
+
+  -- Keybinding for opening or switching to last prompt buffer
+  if keybindings.prompt_last and keybindings.prompt_last ~= "" then
+    vim.keymap.set("n", keybindings.prompt_last, function()
+      history.open_last_prompt_buffer(config)
+    end, {
+      desc = "Open or switch to last prompt file from history",
       silent = true,
     })
   end
@@ -359,6 +392,27 @@ function M.setup(user_config)
     history.send_prompt_file_to_agent(config)
   end, {
     desc = "Send current file to Cursor Agent: @path + 'Complete the task described in this file.'",
+  })
+
+  -- Create command to open prompt history in Telescope
+  vim.api.nvim_create_user_command("CursorAgentHistoryTelescope", function()
+    history.open_history_in_telescope(config)
+  end, {
+    desc = "Open prompt history directory in Telescope",
+  })
+
+  -- Create command to open or switch to last prompt buffer
+  vim.api.nvim_create_user_command("CursorAgentPromptLast", function()
+    history.open_last_prompt_buffer(config)
+  end, {
+    desc = "Open or switch to last prompt file from history",
+  })
+
+  -- Create command to send current file to a new agent
+  vim.api.nvim_create_user_command("CursorAgentPromptSendNew", function()
+    history.send_prompt_file_to_new_agent(config)
+  end, {
+    desc = "Create new Cursor Agent and send current file: @path + 'Complete the task described in this file.'",
   })
 
   -- Create command to copy @file:start-end link to clipboard (range or current line)
