@@ -86,6 +86,8 @@ Work with multiple AI agents simultaneously for different tasks:
 | `<leader>an` | Create new agent terminal with custom prompt |
 | `<leader>at` | Select agent from fuzzy picker (with live preview) |
 | `<leader>ar` | Rename current agent terminal |
+| `<leader>ah` | Create new prompt file in `.nvim-cursor/history/` (timestamp in filename) |
+| `<leader>ae` | Send current file to agent: `@path` + "Complete the task described in this file." |
 
 #### From Terminal Mode
 
@@ -130,6 +132,18 @@ Example:
 
 The agent will have context about which file and lines you're referring to.
 
+### Prompt history workflow
+
+Create a markdown file for a cursor-agent task and send it in one go:
+
+1. **Create prompt file**: `:CursorAgentPromptNew` or `<leader>ah`
+   - Creates `${CWD}/.nvim-cursor/history/` if needed
+   - Opens a new file named like `2025-02-04_14-30-45.md` (date and time to the second)
+2. **Write your prompt** in the opened buffer (what you want the agent to do).
+3. **Send to agent**: `:CursorAgentPromptSend` or `<leader>ae`
+   - Saves the buffer if modified
+   - Shows/creates the agent terminal and sends: `@<path>\nComplete the task described in this file.\n`
+
 ### Commands
 
 The plugin provides comprehensive commands for all operations:
@@ -140,6 +154,10 @@ The plugin provides comprehensive commands for all operations:
 - `:CursorAgentSelect` - Open agent picker
 - `:CursorAgentRename [name]` - Rename active agent (interactive if no argument)
 - `:CursorAgentList` - List all agent terminals with status
+
+#### Prompt history
+- `:CursorAgentPromptNew` - Create new prompt file in `.nvim-cursor/history/` (timestamp in filename)
+- `:CursorAgentPromptSend` - Send current file to agent: `@path` + "Complete the task described in this file."
 
 > **Note:** To close an agent terminal, simply type `exit` in the terminal or press `Ctrl+D`
 
@@ -159,6 +177,12 @@ require("neovim-cursor").setup({
     new = "<leader>an",          -- Create new agent terminal
     select = "<leader>at",       -- Select agent terminal (fuzzy picker)
     rename = "<leader>ar",       -- Rename current agent terminal
+    prompt_new = "<leader>ah",  -- Create new prompt file in .nvim-cursor/history
+    prompt_send = "<leader>ae", -- Send current file to agent (complete task in file)
+  },
+
+  history = {
+    dir = ".nvim-cursor/history",  -- Relative to CWD
   },
 
   -- Terminal naming configuration

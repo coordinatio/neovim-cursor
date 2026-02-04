@@ -11,6 +11,13 @@ M.defaults = {
     new = "<leader>an",          -- Create new agent terminal
     select = "<leader>at",       -- Select agent terminal (fuzzy picker)
     rename = "<leader>ar",       -- Rename current agent terminal
+    prompt_new = "<leader>ah",   -- Create new prompt file in .nvim-cursor/history
+    prompt_send = "<leader>ae",  -- Send current file to agent with "Complete the task..."
+  },
+
+  -- Prompt history (md files for cursor-agent tasks)
+  history = {
+    dir = ".nvim-cursor/history",  -- Relative to CWD
   },
 
   -- Terminal naming configuration

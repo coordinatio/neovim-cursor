@@ -17,6 +17,7 @@ local config_module = require("neovim-cursor.config")
 local terminal = require("neovim-cursor.terminal")
 local tabs = require("neovim-cursor.tabs")
 local picker = require("neovim-cursor.picker")
+local history = require("neovim-cursor.history")
 
 local M = {}
 local config = {}
@@ -191,6 +192,8 @@ function M.setup(user_config)
     new = "<leader>an",
     select = "<leader>at",
     rename = "<leader>ar",
+    prompt_new = "<leader>ah",
+    prompt_send = "<leader>ae",
   }
 
   -- Set up keybindings for toggle (skip if binding is empty string)
@@ -232,6 +235,26 @@ function M.setup(user_config)
   if keybindings.rename and keybindings.rename ~= "" then
     vim.keymap.set("n", keybindings.rename, M.rename_terminal_handler, {
       desc = "Rename Cursor Agent terminal",
+      silent = true,
+    })
+  end
+
+  -- Keybinding for creating new prompt file in history
+  if keybindings.prompt_new and keybindings.prompt_new ~= "" then
+    vim.keymap.set("n", keybindings.prompt_new, function()
+      history.create_prompt_file(config)
+    end, {
+      desc = "Create new prompt file in .nvim-cursor/history",
+      silent = true,
+    })
+  end
+
+  -- Keybinding for sending current file to agent
+  if keybindings.prompt_send and keybindings.prompt_send ~= "" then
+    vim.keymap.set("n", keybindings.prompt_send, function()
+      history.send_prompt_file_to_agent(config)
+    end, {
+      desc = "Send current file to Cursor Agent (complete task in file)",
       silent = true,
     })
   end
@@ -288,6 +311,20 @@ function M.setup(user_config)
     desc = "List all Cursor Agent terminals",
   })
 
+  -- Create command to create new prompt file in history
+  vim.api.nvim_create_user_command("CursorAgentPromptNew", function()
+    history.create_prompt_file(config)
+  end, {
+    desc = "Create new prompt file in .nvim-cursor/history (timestamp in filename)",
+  })
+
+  -- Create command to send current file to agent
+  vim.api.nvim_create_user_command("CursorAgentPromptSend", function()
+    history.send_prompt_file_to_agent(config)
+  end, {
+    desc = "Send current file to Cursor Agent: @path + 'Complete the task described in this file.'",
+  })
+
   -- Create command to send text manually
   vim.api.nvim_create_user_command("CursorAgentSend", function(opts)
     local active_id = tabs.get_active()
@@ -313,6 +350,7 @@ end
 M.terminal = terminal
 M.tabs = tabs
 M.picker = picker
+M.history = history
 
 return M
 
