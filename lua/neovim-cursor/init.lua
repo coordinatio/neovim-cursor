@@ -181,7 +181,7 @@ function M.visual_mode_handler()
   end, 100)  -- 100ms delay to ensure terminal is ready
 end
 
--- Copy Cursor-style @file:start-end link to clipboard (system clipboard register +).
+-- Copy Cursor-style @file:start-end link to unnamed register (nvim buffer).
 -- Used from visual mode (range from '< and '>) or from command (range from opts or current line).
 local function copy_range_link_to_clipboard(filepath, start_line, end_line)
   if not filepath or filepath == "" then
@@ -189,11 +189,11 @@ local function copy_range_link_to_clipboard(filepath, start_line, end_line)
     return
   end
   local link = "@" .. filepath .. ":" .. start_line .. "-" .. end_line
-  vim.fn.setreg("+", link)
-  vim.notify("Copied to clipboard: " .. link, vim.log.levels.INFO)
+  vim.fn.setreg('"', link)
+  vim.notify("Copied to buffer: " .. link, vim.log.levels.INFO)
 end
 
--- Handler: copy link for last visual selection to clipboard (call after exiting visual mode).
+-- Handler: copy link for last visual selection to unnamed register (call after exiting visual mode).
 function M.copy_link_handler()
   local buf = vim.api.nvim_get_current_buf()
   local filepath = vim.api.nvim_buf_get_name(buf)
@@ -316,7 +316,7 @@ function M.setup(user_config)
     })
   end
 
-  -- Keybinding for copying @file:start-end link to clipboard (visual mode)
+  -- Keybinding for copying @file:start-end link to unnamed register (visual mode)
   if keybindings.copy_link and keybindings.copy_link ~= "" then
     vim.keymap.set("v", keybindings.copy_link, function()
       local esc = vim.api.nvim_replace_termcodes("<Esc>", true, false, true)
@@ -415,7 +415,7 @@ function M.setup(user_config)
     desc = "Create new Cursor Agent and send current file: @path + 'Complete the task described in this file.'",
   })
 
-  -- Create command to copy @file:start-end link to clipboard (range or current line)
+  -- Create command to copy @file:start-end link to unnamed register (range or current line)
   vim.api.nvim_create_user_command("CursorAgentCopyLink", function(opts)
     local buf = vim.api.nvim_get_current_buf()
     local filepath = vim.api.nvim_buf_get_name(buf)
@@ -423,7 +423,7 @@ function M.setup(user_config)
     local line2 = opts.line2 or line1
     copy_range_link_to_clipboard(filepath, line1, line2)
   end, {
-    desc = "Copy Cursor @file:start-end link to clipboard (for prompt); range or current line",
+    desc = "Copy Cursor @file:start-end link to unnamed register (for prompt); range or current line",
     range = true,
   })
 

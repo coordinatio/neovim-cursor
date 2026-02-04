@@ -217,7 +217,7 @@ require("neovim-cursor").setup({
     prompt_send_new = "<leader>aE",  -- Send current file to a new agent
     prompt_history_telescope = "<leader>aH",  -- Open prompt history in Telescope
     prompt_last = "<leader>al",      -- Open or switch to last prompt buffer
-    copy_link = "<leader>ac",        -- Copy @file:start-end link to clipboard (visual mode)
+    copy_link = "<leader>ac",        -- Copy @file:start-end link to unnamed register (visual mode)
   },
 
   history = {

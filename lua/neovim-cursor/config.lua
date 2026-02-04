@@ -16,7 +16,7 @@ M.defaults = {
     prompt_send_new = "<leader>aE",  -- Send current file to a new agent (like new + prompt_send)
     prompt_history_telescope = "<leader>aH",  -- Open prompt history dir in Telescope
     prompt_last = "<leader>al",      -- Open or switch to last prompt buffer
-    copy_link = "<leader>ac",        -- Copy @file:start-end link to clipboard (for Cursor prompt)
+    copy_link = "<leader>ac",        -- Copy @file:start-end link to unnamed register (for Cursor prompt)
   },
 
   -- Prompt history (md files for cursor-agent tasks)
