@@ -16,6 +16,72 @@ local function history_dir_path(cfg)
   return cwd .. "/" .. dir:gsub("/$", "")
 end
 
+-- Parse timestamp from filename like: 2025-02-04_14-30-45.md
+-- @return number|nil unix timestamp (seconds) if parseable
+local function parse_timestamp_from_filename(filename)
+  local y, mo, d, h, mi, s = filename:match("^(%d%d%d%d)%-(%d%d)%-(%d%d)_(%d%d)%-(%d%d)%-(%d%d)%.md$")
+  if not y then
+    return nil
+  end
+  return os.time({
+    year = tonumber(y),
+    month = tonumber(mo),
+    day = tonumber(d),
+    hour = tonumber(h),
+    min = tonumber(mi),
+    sec = tonumber(s),
+  })
+end
+
+-- Return sorted history entries (new -> old).
+-- Sorting strategy:
+-- 1) Prefer timestamp parsed from filename (YYYY-MM-DD_HH-MM-SS.md)
+-- 2) Fallback to filesystem mtime (seconds)
+-- 3) Tie-break by filename (descending)
+local function list_history_files_sorted(config)
+  config = config or {}
+  local dir = history_dir_path(config)
+
+  if vim.fn.isdirectory(dir) ~= 1 then
+    return {}, dir
+  end
+
+  local files = vim.fn.readdir(dir)
+  local entries = {}
+
+  for _, f in ipairs(files) do
+    if f:match("%.md$") then
+      local fullpath = dir .. "/" .. f
+      local ts = parse_timestamp_from_filename(f)
+
+      if not ts then
+        -- getftime() returns seconds since epoch, or -1 on error
+        local ft = vim.fn.getftime(fullpath)
+        if type(ft) == "number" and ft >= 0 then
+          ts = ft
+        else
+          ts = 0
+        end
+      end
+
+      table.insert(entries, {
+        name = f,
+        path = fullpath,
+        ts = ts,
+      })
+    end
+  end
+
+  table.sort(entries, function(a, b)
+    if a.ts ~= b.ts then
+      return a.ts > b.ts
+    end
+    return a.name > b.name
+  end)
+
+  return entries, dir
+end
+
 -- Expose history dir path for other modules
 function M.history_dir_path(config)
   return history_dir_path(config)
@@ -106,19 +172,79 @@ end
 -- Open history directory in Telescope (find_files with cwd = history dir).
 -- No-op with a warning if Telescope is not available.
 function M.open_history_in_telescope(config)
-  local ok, builtin = pcall(require, "telescope.builtin")
+  local ok = pcall(require, "telescope")
   if not ok then
     vim.notify("telescope.nvim is required for CursorAgentHistoryTelescope", vim.log.levels.WARN)
     return
   end
-  local dir = history_dir_path(config)
+
+  local entries, dir = list_history_files_sorted(config)
   if vim.fn.isdirectory(dir) ~= 1 then
     vim.fn.mkdir(dir, "p")
   end
-  builtin.find_files({
+
+  local pickers = require("telescope.pickers")
+  local finders = require("telescope.finders")
+  local conf = require("telescope.config").values
+  local actions = require("telescope.actions")
+  local action_state = require("telescope.actions.state")
+  local make_entry = require("telescope.make_entry")
+  local sorters = require("telescope.sorters")
+
+  local results = {}
+  for _, e in ipairs(entries) do
+    -- Feed relative names to the file entry maker with cwd=dir
+    table.insert(results, e.name)
+  end
+
+  local entry_maker = make_entry.gen_from_file({
     cwd = dir,
-    prompt_title = "Prompt history",
   })
+
+  -- Ensure stable chronological order when prompt is empty, but keep
+  -- normal Telescope file filtering/sorting when the user types.
+  local base_sorter = conf.file_sorter({})
+  local chronological_sorter = sorters.Sorter:new({
+    discard = base_sorter.discard,
+    scoring_function = function(_, prompt, line, entry, cb_add, cb_filter)
+      if not prompt or prompt == "" then
+        return 1
+      end
+      return base_sorter:scoring_function(prompt, line, entry, cb_add, cb_filter)
+    end,
+    highlighter = function(_, prompt, display)
+      if base_sorter.highlighter and prompt and prompt ~= "" then
+        return base_sorter:highlighter(prompt, display)
+      end
+      return {}
+    end,
+  })
+
+  pickers.new({}, {
+    prompt_title = "Prompt history",
+    finder = finders.new_table({
+      results = results,
+      entry_maker = entry_maker,
+    }),
+    sorter = chronological_sorter,
+    tiebreak = function()
+      return false
+    end,
+    previewer = conf.file_previewer({}),
+    attach_mappings = function(prompt_bufnr, map)
+      actions.select_default:replace(function()
+        actions.close(prompt_bufnr)
+        local selection = action_state.get_selected_entry()
+        if selection then
+          local path = selection.path or selection.value
+          if path and path ~= "" then
+            vim.cmd("edit " .. vim.fn.fnameescape(path))
+          end
+        end
+      end)
+      return true
+    end,
+  }):find()
 end
 
 -- Open or switch to the buffer of the last prompt file from history.
