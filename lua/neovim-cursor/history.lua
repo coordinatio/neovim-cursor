@@ -189,6 +189,7 @@ function M.open_history_in_telescope(config)
   local actions = require("telescope.actions")
   local action_state = require("telescope.actions.state")
   local make_entry = require("telescope.make_entry")
+  local previewers = require("telescope.previewers")
   local sorters = require("telescope.sorters")
 
   local results = {}
@@ -220,6 +221,37 @@ function M.open_history_in_telescope(config)
     end,
   })
 
+  -- Use a custom file previewer so we can enable wrapping in the preview window.
+  -- Telescope's default file previewer typically uses 'nowrap', which is painful for
+  -- long prompt lines.
+  local history_previewer = previewers.new_buffer_previewer({
+    title = "Prompt preview",
+    define_preview = function(self, entry, _status)
+      local path = entry.path or entry.value
+      if not path or path == "" then
+        vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, { "No file to preview" })
+        return
+      end
+
+      -- Reuse Telescope's built-in file loading logic (respects previewer config).
+      previewers.buffer_previewer_maker(path, self.state.bufnr, { winid = self.state.winid })
+
+      -- Enable wrapping in the preview window.
+      local winid = self.state.winid
+      if winid and vim.api.nvim_win_is_valid(winid) then
+        if vim.api.nvim_set_option_value then
+          pcall(vim.api.nvim_set_option_value, "wrap", true, { win = winid })
+          pcall(vim.api.nvim_set_option_value, "linebreak", true, { win = winid })
+          pcall(vim.api.nvim_set_option_value, "breakindent", true, { win = winid })
+        else
+          pcall(function() vim.wo[winid].wrap = true end)
+          pcall(function() vim.wo[winid].linebreak = true end)
+          pcall(function() vim.wo[winid].breakindent = true end)
+        end
+      end
+    end,
+  })
+
   pickers.new({}, {
     prompt_title = "Prompt history",
     finder = finders.new_table({
@@ -230,7 +262,7 @@ function M.open_history_in_telescope(config)
     tiebreak = function()
       return false
     end,
-    previewer = conf.file_previewer({}),
+    previewer = history_previewer,
     attach_mappings = function(prompt_bufnr, map)
       actions.select_default:replace(function()
         actions.close(prompt_bufnr)
