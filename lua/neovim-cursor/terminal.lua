@@ -181,6 +181,7 @@ local function create_terminal_instance(id, config)
     new = "<C-n>",
     rename = "<C-r>",
     select = "<C-t>",
+    prompt_last = "<F12>",
   }, config.terminal_keybindings or {})
 
   -- Backward compatibility: if someone only set `exit`, treat it as `hide`.
@@ -233,6 +234,15 @@ local function create_terminal_instance(id, config)
       noremap = true,
       silent = true,
       desc = "Select agent terminal"
+    })
+  end
+
+  -- Set up buffer-local keymap for opening/switching last prompt from terminal mode
+  if term_keys.prompt_last and term_keys.prompt_last ~= "" then
+    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.prompt_last, '<C-\\><C-n>:lua require("neovim-cursor").open_last_prompt_from_terminal_handler()<CR>', {
+      noremap = true,
+      silent = true,
+      desc = "Open last prompt file"
     })
   end
 

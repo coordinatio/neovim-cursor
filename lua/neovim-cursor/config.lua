@@ -12,7 +12,7 @@ M.defaults = {
     select = "<leader>at",           -- Select agent terminal (fuzzy picker)
     rename = "<leader>ar",           -- Rename current agent terminal
     prompt_new = "<leader>ah",       -- Create new prompt file in .nvim-cursor/history
-    prompt_send = "<leader>ae",      -- Send current file to agent with "Complete the task..."
+    prompt_send = "<leader>ae",      -- Send current file contents to agent
     prompt_send_new = "<leader>aE",  -- Send current file to a new agent (like new + prompt_send)
     prompt_history_telescope = "<leader>aH",  -- Open prompt history dir in Telescope
     prompt_last = "<leader>al",      -- Open or switch to last prompt buffer
@@ -51,6 +51,7 @@ M.defaults = {
     new = "<C-n>",       -- Create new agent terminal
     rename = "<C-r>",    -- Rename current agent window
     select = "<C-t>",    -- Select agent terminal
+    prompt_last = "<F12>", -- Open or switch to last prompt buffer
   },
 }
 

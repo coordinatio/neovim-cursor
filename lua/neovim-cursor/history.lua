@@ -2,7 +2,7 @@
 --
 -- Provides:
 -- - Creating a new markdown file in ${CWD}/.nvim-cursor/history/ with timestamp in filename
--- - Sending the current file to cursor-agent as @path + "Complete the task described in this file."
+-- - Sending the current file contents to cursor-agent
 --
 local M = {}
 
@@ -82,6 +82,91 @@ local function list_history_files_sorted(config)
   return entries, dir
 end
 
+local function is_plugin_prompt_file_buffer(buf, config)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return false
+  end
+
+  if vim.bo[buf].buftype ~= "" then
+    return false
+  end
+
+  local path = vim.api.nvim_buf_get_name(buf)
+  if not path or path == "" then
+    return false
+  end
+
+  local abs_path = vim.fn.fnamemodify(path, ":p")
+  local history_dir = vim.fn.fnamemodify(history_dir_path(config), ":p"):gsub("/$", "")
+  local history_prefix = history_dir .. "/"
+
+  if abs_path:sub(1, #history_prefix) ~= history_prefix then
+    return false
+  end
+
+  local filename = vim.fn.fnamemodify(abs_path, ":t")
+  return parse_timestamp_from_filename(filename) ~= nil
+end
+
+local function has_file_buffers()
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_valid(buf) and vim.fn.buflisted(buf) == 1 then
+      if vim.bo[buf].buftype == "" and vim.api.nvim_buf_get_name(buf) ~= "" then
+        return true
+      end
+    end
+  end
+  return false
+end
+
+local function find_replacement_file_buffer(excluded_buf)
+  for _, candidate in ipairs(vim.api.nvim_list_bufs()) do
+    if candidate ~= excluded_buf
+      and vim.api.nvim_buf_is_valid(candidate)
+      and vim.fn.buflisted(candidate) == 1
+      and vim.bo[candidate].buftype == ""
+      and vim.api.nvim_buf_get_name(candidate) ~= "" then
+      return candidate
+    end
+  end
+  return nil
+end
+
+local function replace_prompt_in_open_windows(buf)
+  local replacement = find_replacement_file_buffer(buf)
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == buf then
+      if replacement then
+        vim.api.nvim_win_set_buf(win, replacement)
+      else
+        vim.api.nvim_win_call(win, function()
+          vim.cmd("enew")
+        end)
+      end
+    end
+  end
+end
+
+local function close_sent_prompt_buffer_if_needed(buf, config)
+  if not is_plugin_prompt_file_buffer(buf, config) then
+    return
+  end
+
+  -- To preserve split layout, first replace this prompt buffer in every window
+  -- that currently shows it, then delete the prompt buffer itself.
+  replace_prompt_in_open_windows(buf)
+
+  local ok, err = pcall(vim.api.nvim_buf_delete, buf, {})
+  if not ok then
+    vim.notify("Failed to close sent prompt buffer: " .. tostring(err), vim.log.levels.WARN)
+    return
+  end
+
+  if not has_file_buffers() then
+    vim.cmd("enew")
+  end
+end
+
 -- Expose history dir path for other modules
 function M.history_dir_path(config)
   return history_dir_path(config)
@@ -104,12 +189,22 @@ function M.create_prompt_file(config)
   vim.notify("Created " .. fullpath, vim.log.levels.INFO)
 end
 
--- Send current buffer's file to cursor-agent: @path + "Complete the task described in this file."
+local function current_buffer_text(buf)
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local text = table.concat(lines, "\n")
+  if text == "" then
+    return "\n"
+  end
+  return text .. "\n"
+end
+
+-- Send current buffer's file contents to cursor-agent.
 -- Ensures at least one terminal exists and shows it, then sends the text.
 -- Saves the current buffer if modified so the file exists on disk for the agent.
 -- @param config Plugin config (for terminal/tabs)
 function M.send_prompt_file_to_agent(config)
   local buf = vim.api.nvim_get_current_buf()
+  local source_buf = buf
   local path = vim.api.nvim_buf_get_name(buf)
   if path == nil or path == "" then
     vim.notify("Current buffer has no file path (save the file first)", vim.log.levels.WARN)
@@ -135,12 +230,15 @@ function M.send_prompt_file_to_agent(config)
     end
   end
 
-  local text_to_send = "@" .. path .. "\nComplete the task described in this file.\n"
+  local text_to_send = current_buffer_text(buf)
   vim.defer_fn(function()
     local active_id = tabs.get_active()
     if active_id and terminal.is_running(active_id) then
-      terminal.send_text(text_to_send, active_id)
-      vim.notify("Sent prompt file to agent", vim.log.levels.INFO)
+      local sent = terminal.send_text(text_to_send, active_id)
+      if sent then
+        vim.notify("Sent current file contents to agent", vim.log.levels.INFO)
+        close_sent_prompt_buffer_if_needed(source_buf, config)
+      end
     end
   end, 100)
 end
@@ -297,6 +395,7 @@ end
 -- Like send_prompt_file_to_agent but creates a new cursor-agent instance (like CursorAgentNew).
 function M.send_prompt_file_to_new_agent(config)
   local buf = vim.api.nvim_get_current_buf()
+  local source_buf = buf
   local path = vim.api.nvim_buf_get_name(buf)
   if path == nil or path == "" then
     vim.notify("Current buffer has no file path (save the file first)", vim.log.levels.WARN)
@@ -313,12 +412,15 @@ function M.send_prompt_file_to_new_agent(config)
 
   tabs.create_terminal(nil, config)
 
-  local text_to_send = "@" .. path .. "\nComplete the task described in this file.\n"
+  local text_to_send = current_buffer_text(buf)
   vim.defer_fn(function()
     local active_id = tabs.get_active()
     if active_id and terminal.is_running(active_id) then
-      terminal.send_text(text_to_send, active_id)
-      vim.notify("Sent prompt file to new agent", vim.log.levels.INFO)
+      local sent = terminal.send_text(text_to_send, active_id)
+      if sent then
+        vim.notify("Sent current file contents to new agent", vim.log.levels.INFO)
+        close_sent_prompt_buffer_if_needed(source_buf, config)
+      end
     end
   end, 100)
 end

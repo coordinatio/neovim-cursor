@@ -91,8 +91,8 @@ Work with multiple AI agents simultaneously for different tasks:
 | `<leader>at` | Select agent from fuzzy picker (with live preview) |
 | `<leader>ar` | Rename current agent terminal |
 | `<leader>ah` | Create new prompt file in `.nvim-cursor/history/` (timestamp in filename) |
-| `<leader>ae` | Send current file to agent: `@path` + "Complete the task described in this file." |
-| `<leader>aE` | Send current file to a **new** agent (create new instance + send task) |
+| `<leader>ae` | Send current file contents to agent |
+| `<leader>aE` | Send current file contents to a **new** agent (create new instance + send task) |
 | `<leader>aH` | Open prompt history directory in Telescope (requires telescope.nvim) |
 | `<leader>al` | Open or switch to last prompt file from history |
 
@@ -112,6 +112,7 @@ When you're inside an agent terminal, you can manage agents without leaving:
 | `<C-n>` | Create new agent terminal |
 | `<C-t>` | Select agent from fuzzy picker |
 | `<C-r>` | Rename current agent terminal |
+| `<F12>` | Open or switch to last prompt file from history |
 
 > **Note:** All terminal mode keybindings are configurable via `terminal_keybindings` option (see Configuration section).
 
@@ -164,7 +165,9 @@ Create a markdown file for a cursor-agent task and send it in one go:
 2. **Write your prompt** in the opened buffer (what you want the agent to do).
 3. **Send to agent**: `:CursorAgentPromptSend` or `<leader>ae`
    - Saves the buffer if modified
-   - Shows/creates the agent terminal and sends: `@<path>\nComplete the task described in this file.\n`
+   - Shows/creates the agent terminal and sends the current buffer contents directly
+   - If current buffer is a prompt file created by `<leader>ah`, it is closed with `:bd` semantics after successful send
+   - If no file buffers remain, opens an empty buffer like `:new`
 
 **Additional prompt history actions:**
 
@@ -173,7 +176,8 @@ Create a markdown file for a cursor-agent task and send it in one go:
 - **Open last prompt**: `:CursorAgentPromptLast` or `<leader>al`  
   Opens or switches to the buffer of the most recent prompt file (by timestamp in filename).
 - **Send to new agent**: `:CursorAgentPromptSendNew` or `<leader>aE`  
-  Same as prompt_send but creates a new agent terminal first (like `CursorAgentNew`), then sends the current file.
+  Same as prompt_send but creates a new agent terminal first (like `CursorAgentNew`), then sends the current buffer contents.  
+  The same prompt-buffer auto-close behavior applies after successful send.
 
 ### Commands
 
@@ -188,8 +192,8 @@ The plugin provides comprehensive commands for all operations:
 
 #### Prompt history
 - `:CursorAgentPromptNew` - Create new prompt file in `.nvim-cursor/history/` (timestamp in filename)
-- `:CursorAgentPromptSend` - Send current file to agent: `@path` + "Complete the task described in this file."
-- `:CursorAgentPromptSendNew` - Create new agent and send current file (like new + prompt_send)
+- `:CursorAgentPromptSend` - Send current file contents to the active agent terminal
+- `:CursorAgentPromptSendNew` - Create new agent and send current file contents (like new + prompt_send)
 - `:CursorAgentHistoryTelescope` - Open prompt history directory in Telescope
 - `:CursorAgentPromptLast` - Open or switch to last prompt file from history
 
@@ -213,7 +217,7 @@ require("neovim-cursor").setup({
     select = "<leader>at",           -- Select agent terminal (fuzzy picker)
     rename = "<leader>ar",           -- Rename current agent terminal
     prompt_new = "<leader>ah",       -- Create new prompt file in .nvim-cursor/history
-    prompt_send = "<leader>ae",      -- Send current file to agent (complete task in file)
+    prompt_send = "<leader>ae",      -- Send current file contents to agent
     prompt_send_new = "<leader>aE",  -- Send current file to a new agent
     prompt_history_telescope = "<leader>aH",  -- Open prompt history in Telescope
     prompt_last = "<leader>al",      -- Open or switch to last prompt buffer
@@ -257,6 +261,7 @@ require("neovim-cursor").setup({
     new = "<C-n>",       -- Create new agent terminal
     rename = "<C-r>",    -- Rename current agent terminal
     select = "<C-t>",    -- Select agent terminal
+    prompt_last = "<F12>", -- Open or switch to last prompt buffer
   },
 })
 ```
@@ -332,6 +337,7 @@ require("neovim-cursor").setup({
     new = "<leader>n",   -- Use <leader>n for new terminal
     rename = "<leader>r", -- Use <leader>r for rename
     select = "<leader>t", -- Use <leader>t for select
+    prompt_last = "<leader>l", -- Open or switch to last prompt buffer
   },
 })
 ```

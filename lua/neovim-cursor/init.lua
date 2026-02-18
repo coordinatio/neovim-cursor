@@ -61,6 +61,18 @@ function M.new_terminal_from_terminal_handler()
   end)
 end
 
+-- Handler for opening last prompt file from within terminal mode
+-- Hides current terminal first, then opens/switches to the latest prompt buffer
+function M.open_last_prompt_from_terminal_handler()
+  -- Hide the current terminal
+  terminal.hide()
+
+  -- Schedule prompt opening to happen after hiding completes
+  vim.schedule(function()
+    history.open_last_prompt_buffer(config)
+  end)
+end
+
 -- Handler for selecting a terminal from picker
 function M.select_terminal_handler()
   picker.pick_terminal(config, function(selected_id)
@@ -281,7 +293,7 @@ function M.setup(user_config)
     vim.keymap.set("n", keybindings.prompt_send, function()
       history.send_prompt_file_to_agent(config)
     end, {
-      desc = "Send current file to Cursor Agent (complete task in file)",
+      desc = "Send current file contents to Cursor Agent",
       silent = true,
     })
   end
@@ -291,7 +303,7 @@ function M.setup(user_config)
     vim.keymap.set("n", keybindings.prompt_send_new, function()
       history.send_prompt_file_to_new_agent(config)
     end, {
-      desc = "Send current file to new Cursor Agent (new instance + complete task)",
+      desc = "Send current file contents to new Cursor Agent",
       silent = true,
     })
   end
@@ -391,7 +403,7 @@ function M.setup(user_config)
   vim.api.nvim_create_user_command("CursorAgentPromptSend", function()
     history.send_prompt_file_to_agent(config)
   end, {
-    desc = "Send current file to Cursor Agent: @path + 'Complete the task described in this file.'",
+    desc = "Send current file contents to Cursor Agent",
   })
 
   -- Create command to open prompt history in Telescope
@@ -412,7 +424,7 @@ function M.setup(user_config)
   vim.api.nvim_create_user_command("CursorAgentPromptSendNew", function()
     history.send_prompt_file_to_new_agent(config)
   end, {
-    desc = "Create new Cursor Agent and send current file: @path + 'Complete the task described in this file.'",
+    desc = "Create new Cursor Agent and send current file contents",
   })
 
   -- Create command to copy @file:start-end link to unnamed register (range or current line)
