@@ -205,6 +205,25 @@ local function copy_range_link_to_clipboard(filepath, start_line, end_line)
   vim.notify("Copied to buffer: " .. link, vim.log.levels.INFO)
 end
 
+-- Copy Cursor-style @file link to unnamed register (nvim buffer).
+-- Used from normal mode when no explicit range is needed.
+local function copy_file_link_to_clipboard(filepath)
+  if not filepath or filepath == "" then
+    vim.notify("No file path (buffer not saved?)", vim.log.levels.WARN)
+    return
+  end
+  local link = "@" .. filepath
+  vim.fn.setreg('"', link)
+  vim.notify("Copied to buffer: " .. link, vim.log.levels.INFO)
+end
+
+-- Handler: copy @file link for current buffer to unnamed register.
+function M.copy_file_link_handler()
+  local buf = vim.api.nvim_get_current_buf()
+  local filepath = vim.api.nvim_buf_get_name(buf)
+  copy_file_link_to_clipboard(filepath)
+end
+
 -- Handler: copy link for last visual selection to unnamed register (call after exiting visual mode).
 function M.copy_link_handler()
   local buf = vim.api.nvim_get_current_buf()
@@ -328,8 +347,13 @@ function M.setup(user_config)
     })
   end
 
-  -- Keybinding for copying @file:start-end link to unnamed register (visual mode)
+  -- Keybinding for copying Cursor links to unnamed register (normal + visual modes)
   if keybindings.copy_link and keybindings.copy_link ~= "" then
+    vim.keymap.set("n", keybindings.copy_link, M.copy_file_link_handler, {
+      desc = "Copy Cursor @file link to clipboard",
+      silent = true,
+    })
+
     vim.keymap.set("v", keybindings.copy_link, function()
       local esc = vim.api.nvim_replace_termcodes("<Esc>", true, false, true)
       vim.api.nvim_feedkeys(esc, "x", false)

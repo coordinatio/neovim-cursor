@@ -16,7 +16,7 @@ This was created using Cursor in ~20 minutes; it doesn't have to be perfect, jus
 - ✏️ **Rename and organize** agent terminals for different tasks
 - ⌨️ **Full terminal mode support** - manage agents without leaving the terminal
 - 📝 Send visual selections and file paths to the Cursor agent
-- 📎 Copy `@file:start-end` link to clipboard for pasting into Cursor prompts
+- 📎 Copy Cursor links quickly: `@file` (normal mode) or `@file:start-end` (visual mode)
 - 📂 **Prompt history in Telescope** – browse `.nvim-cursor/history/` with Telescope
 - 📄 **Last prompt buffer** – open or switch to the most recent prompt file
 - 🆕 **Send to new agent** – send current file to a fresh agent (like new + prompt_send)
@@ -95,6 +95,7 @@ Work with multiple AI agents simultaneously for different tasks:
 | `<leader>aE` | Send current file contents to a **new** agent (create new instance + send task) |
 | `<leader>aH` | Open prompt history directory in Telescope (requires telescope.nvim) |
 | `<leader>al` | Open or switch to last prompt file from history |
+| `<leader>ac` | Copy `@file` link to clipboard (paste into Cursor prompt) |
 
 #### From Visual Mode
 
@@ -155,6 +156,8 @@ The agent will have context about which file and lines you're referring to.
 
 Use this when you want to reference a line range in a prompt without sending it to the agent terminal immediately.
 
+In normal mode, press `<leader>ac` without selecting anything to copy `@path/to/file` (no line range).
+
 ### Prompt history workflow
 
 Create a markdown file for a cursor-agent task and send it in one go:
@@ -198,7 +201,7 @@ The plugin provides comprehensive commands for all operations:
 - `:CursorAgentPromptLast` - Open or switch to last prompt file from history
 
 #### Utilities
-- `:CursorAgentCopyLink [range]` - Copy `@file:start-end` link to clipboard; use range (e.g. `:10,20CursorAgentCopyLink`) or current line
+- `:CursorAgentCopyLink [range]` - Copy `@file:start-end` link to clipboard; use range (e.g. `:10,20CursorAgentCopyLink`) or current line (`@file:line-line`)
 - `:CursorAgentSend <text>` - Send arbitrary text to active agent
 - `:CursorAgentVersion` - Display plugin version
 
@@ -221,7 +224,7 @@ require("neovim-cursor").setup({
     prompt_send_new = "<leader>aE",  -- Send current file to a new agent
     prompt_history_telescope = "<leader>aH",  -- Open prompt history in Telescope
     prompt_last = "<leader>al",      -- Open or switch to last prompt buffer
-    copy_link = "<leader>ac",        -- Copy @file:start-end link to unnamed register (visual mode)
+    copy_link = "<leader>ac",        -- Copy link: normal mode => @file, visual mode => @file:start-end
   },
 
   history = {
@@ -279,7 +282,7 @@ require("neovim-cursor").setup({
     new = "<C-n>",          -- Use Ctrl+n for new terminal
     select = "<C-s>",       -- Use Ctrl+s for select
     rename = "<leader>rn",  -- Use <leader>rn for rename
-    copy_link = "<leader>ac", -- Copy link in visual mode (use "" to disable)
+    copy_link = "<leader>ac", -- Copy link: normal mode => @file, visual mode => @file:start-end (use "" to disable)
   },
 })
 ```
