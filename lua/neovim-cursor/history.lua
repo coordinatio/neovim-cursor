@@ -108,17 +108,6 @@ local function is_plugin_prompt_file_buffer(buf, config)
   return parse_timestamp_from_filename(filename) ~= nil
 end
 
-local function has_file_buffers()
-  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.api.nvim_buf_is_valid(buf) and vim.fn.buflisted(buf) == 1 then
-      if vim.bo[buf].buftype == "" and vim.api.nvim_buf_get_name(buf) ~= "" then
-        return true
-      end
-    end
-  end
-  return false
-end
-
 local function find_replacement_file_buffer(excluded_buf)
   for _, candidate in ipairs(vim.api.nvim_list_bufs()) do
     if candidate ~= excluded_buf
@@ -132,17 +121,24 @@ local function find_replacement_file_buffer(excluded_buf)
   return nil
 end
 
-local function replace_prompt_in_open_windows(buf)
-  local replacement = find_replacement_file_buffer(buf)
+local function find_empty_unnamed_buffer(excluded_buf)
+  for _, candidate in ipairs(vim.api.nvim_list_bufs()) do
+    if candidate ~= excluded_buf
+      and vim.api.nvim_buf_is_valid(candidate)
+      and vim.fn.buflisted(candidate) == 1
+      and vim.bo[candidate].buftype == ""
+      and vim.api.nvim_buf_get_name(candidate) == ""
+      and not vim.bo[candidate].modified then
+      return candidate
+    end
+  end
+  return nil
+end
+
+local function replace_prompt_in_open_windows(buf, replacement)
   for _, win in ipairs(vim.api.nvim_list_wins()) do
     if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == buf then
-      if replacement then
-        vim.api.nvim_win_set_buf(win, replacement)
-      else
-        vim.api.nvim_win_call(win, function()
-          vim.cmd("enew")
-        end)
-      end
+      vim.api.nvim_win_set_buf(win, replacement)
     end
   end
 end
@@ -152,18 +148,21 @@ local function close_sent_prompt_buffer_if_needed(buf, config)
     return
   end
 
+  local replacement = find_replacement_file_buffer(buf) or find_empty_unnamed_buffer(buf)
+  
+  if not replacement then
+    -- No valid buffer to switch to, leave the prompt buffer open
+    return
+  end
+
   -- To preserve split layout, first replace this prompt buffer in every window
   -- that currently shows it, then delete the prompt buffer itself.
-  replace_prompt_in_open_windows(buf)
+  replace_prompt_in_open_windows(buf, replacement)
 
   local ok, err = pcall(vim.api.nvim_buf_delete, buf, {})
   if not ok then
     vim.notify("Failed to close sent prompt buffer: " .. tostring(err), vim.log.levels.WARN)
     return
-  end
-
-  if not has_file_buffers() then
-    vim.cmd("enew")
   end
 end
 
