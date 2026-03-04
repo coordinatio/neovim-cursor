@@ -223,7 +223,10 @@ function M.send_prompt_file_to_agent(config)
   else
     local last_id = tabs.get_last()
     if last_id then
-      terminal.toggle(config, last_id)
+      local state = terminal.get_state(last_id)
+      if not state.is_visible then
+        terminal.toggle(config, last_id)
+      end
     else
       tabs.create_terminal(nil, config)
     end
