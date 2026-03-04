@@ -226,6 +226,11 @@ function M.send_prompt_file_to_agent(config)
       local state = terminal.get_state(last_id)
       if not state.is_visible then
         terminal.toggle(config, last_id)
+      else
+        if state.win and vim.api.nvim_win_is_valid(state.win) then
+          vim.api.nvim_set_current_win(state.win)
+          vim.cmd("startinsert")
+        end
       end
     else
       tabs.create_terminal(nil, config)
