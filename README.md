@@ -243,8 +243,11 @@ require("neovim-cursor").setup({
     size = 0.5,          -- 50% of editor width/height (0.0-1.0)
   },
 
-  -- CLI command to run
+  -- CLI command to run (string or array of strings)
+  -- When an array is provided, a Telescope picker will appear when creating
+  -- a new terminal, letting you choose which command to launch.
   command = "cursor agent",
+  -- command = { "cursor agent", "claude", "aider" },  -- multiple commands
 
   -- Terminal callbacks (optional)
   term_opts = {
@@ -316,6 +319,18 @@ require("neovim-cursor").setup({
   command = "cursor agent --model gpt-4",
 })
 ```
+
+#### Multiple Commands (Command Picker)
+
+Pass an array of commands to get a Telescope picker every time a new terminal is created:
+
+```lua
+require("neovim-cursor").setup({
+  command = { "cursor agent", "claude", "aider", "cursor-agent" },
+})
+```
+
+When only a single command is configured (string or array of one), the picker is skipped.
 
 #### Linux / `cursor-agent` binary
 

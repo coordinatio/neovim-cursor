@@ -14,8 +14,83 @@
 --
 local tabs = require("neovim-cursor.tabs")
 local terminal = require("neovim-cursor.terminal")
+local config_module = require("neovim-cursor.config")
 
 local M = {}
+
+local function has_telescope()
+  return pcall(require, "telescope")
+end
+
+local function pick_command_with_telescope(commands, callback)
+  if not has_telescope() then
+    return false
+  end
+
+  local pickers = require("telescope.pickers")
+  local finders = require("telescope.finders")
+  local conf = require("telescope.config").values
+  local actions = require("telescope.actions")
+  local action_state = require("telescope.actions.state")
+
+  pickers.new({}, {
+    prompt_title = "Select Command",
+    finder = finders.new_table({
+      results = commands,
+      entry_maker = function(entry)
+        return {
+          value = entry,
+          display = entry,
+          ordinal = entry,
+        }
+      end,
+    }),
+    sorter = conf.generic_sorter({}),
+    attach_mappings = function(prompt_bufnr, _map)
+      actions.select_default:replace(function()
+        actions.close(prompt_bufnr)
+        local selection = action_state.get_selected_entry()
+        if selection then
+          callback(selection.value)
+        end
+      end)
+      return true
+    end,
+  }):find()
+
+  return true
+end
+
+local function pick_command_with_ui_select(commands, callback)
+  vim.ui.select(commands, {
+    prompt = "Select Command:",
+  }, function(choice)
+    if choice then
+      callback(choice)
+    end
+  end)
+end
+
+function M.pick_command(config, callback)
+  local commands = config_module.resolve_commands(config)
+
+  if #commands == 0 then
+    callback("cursor agent")
+    return
+  end
+
+  if #commands == 1 then
+    callback(commands[1])
+    return
+  end
+
+  local success = pick_command_with_telescope(commands, callback)
+  if success then
+    return
+  end
+
+  pick_command_with_ui_select(commands, callback)
+end
 
 -- Format terminal info for display in picker
 -- @param term Terminal metadata object
@@ -43,11 +118,6 @@ local function format_terminal_display(term)
   
   -- Format: "? Agent 1 (running, 5m ago)"
   return string.format("%s %s (%s, %s)", status_icon, term.name, status_text, age_str)
-end
-
--- Check if Telescope is available
-local function has_telescope()
-  return pcall(require, "telescope")
 end
 
 -- Pick terminal using Telescope (if available)

@@ -28,25 +28,28 @@ M.version = "1.0.0"
 
 -- Normal mode handler: smart toggle (create first terminal or show last active)
 function M.normal_mode_handler()
-  -- Check if any terminals exist
   if not tabs.has_terminals() then
-    -- No terminals exist, create the first one
-    tabs.create_terminal(nil, config)
+    picker.pick_command(config, function(cmd)
+      tabs.create_terminal(nil, config, cmd)
+    end)
   else
-    -- Terminals exist, toggle the last active one
     local last_id = tabs.get_last()
     if last_id then
-      terminal.toggle(config, last_id)
+      local term_meta = tabs.get_terminal(last_id)
+      terminal.toggle(config, last_id, term_meta and term_meta.command)
     else
-      -- Fallback: create a new terminal
-      tabs.create_terminal(nil, config)
+      picker.pick_command(config, function(cmd)
+        tabs.create_terminal(nil, config, cmd)
+      end)
     end
   end
 end
 
 -- Handler for creating a new terminal
 function M.new_terminal_handler()
-  tabs.create_terminal(nil, config)
+  picker.pick_command(config, function(cmd)
+    tabs.create_terminal(nil, config, cmd)
+  end)
 end
 
 -- Handler for creating a new terminal from within terminal mode
@@ -161,36 +164,51 @@ end
 
 -- Visual mode handler: toggle terminal and send selection
 function M.visual_mode_handler()
-  -- Get the current buffer and file path
   local buf = vim.api.nvim_get_current_buf()
   local filepath = vim.api.nvim_buf_get_name(buf)
 
-  -- Get visual selection line range
   local start_pos = vim.fn.getpos("'<")
   local end_pos = vim.fn.getpos("'>")
   local start_line = start_pos[2]
   local end_line = end_pos[2]
 
-  -- Ensure at least one terminal exists
   if not tabs.has_terminals() then
-    tabs.create_terminal(nil, config)
+    picker.pick_command(config, function(cmd)
+      tabs.create_terminal(nil, config, cmd)
+      vim.defer_fn(function()
+        local active_id = tabs.get_active()
+        if active_id and terminal.is_running(active_id) then
+          local text_to_send = "@" .. filepath .. ":" .. start_line .. "-" .. end_line
+          terminal.send_text(text_to_send, active_id)
+        end
+      end, 200)
+    end)
   else
-    -- Toggle the last active terminal
     local last_id = tabs.get_last()
     if last_id then
-      terminal.toggle(config, last_id)
+      local term_meta = tabs.get_terminal(last_id)
+      terminal.toggle(config, last_id, term_meta and term_meta.command)
+
+      vim.defer_fn(function()
+        local active_id = tabs.get_active()
+        if active_id and terminal.is_running(active_id) then
+          local text_to_send = "@" .. filepath .. ":" .. start_line .. "-" .. end_line
+          terminal.send_text(text_to_send, active_id)
+        end
+      end, 100)
+    else
+      picker.pick_command(config, function(cmd)
+        tabs.create_terminal(nil, config, cmd)
+        vim.defer_fn(function()
+          local active_id = tabs.get_active()
+          if active_id and terminal.is_running(active_id) then
+            local text_to_send = "@" .. filepath .. ":" .. start_line .. "-" .. end_line
+            terminal.send_text(text_to_send, active_id)
+          end
+        end, 200)
+      end)
     end
   end
-
-  -- Wait a bit for terminal to be ready, then send text
-  vim.defer_fn(function()
-    local active_id = tabs.get_active()
-    if active_id and terminal.is_running(active_id) then
-      -- Send the filepath with @ prefix and line range (no content needed)
-      local text_to_send = "@" .. filepath .. ":" .. start_line .. "-" .. end_line
-      terminal.send_text(text_to_send, active_id)
-    end
-  end, 100)  -- 100ms delay to ensure terminal is ready
 end
 
 -- Copy Cursor-style @file:start-end link to unnamed register (nvim buffer).
@@ -374,7 +392,9 @@ function M.setup(user_config)
   -- Create command to create new terminal
   vim.api.nvim_create_user_command("CursorAgentNew", function(opts)
     local name = opts.args and opts.args ~= "" and opts.args or nil
-    tabs.create_terminal(name, config)
+    picker.pick_command(config, function(cmd)
+      tabs.create_terminal(name, config, cmd)
+    end)
   end, {
     desc = "Create new Cursor Agent terminal",
     nargs = "?",

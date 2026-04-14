@@ -36,7 +36,9 @@ M.defaults = {
     size = 0.5,          -- 50% of editor width/height
   },
 
-  -- CLI command to run
+  -- CLI command to run (string or array of strings)
+  -- When an array is provided, a Telescope picker will appear when creating
+  -- a new terminal, letting you choose which command to launch.
   command = "cursor agent",
 
   -- Terminal options
@@ -76,6 +78,24 @@ function M.setup(user_config)
   end
 
   return cfg
+end
+
+function M.resolve_command(command, config)
+  if command then return command end
+  if type(config.command) == "string" then return config.command end
+  if type(config.command) == "table" and #config.command > 0 then return config.command[1] end
+  return "cursor agent"
+end
+
+function M.resolve_commands(config)
+  local cmd = config.command
+  if type(cmd) == "table" then
+    return cmd
+  end
+  if type(cmd) == "string" then
+    return { cmd }
+  end
+  return { "cursor agent" }
 end
 
 return M

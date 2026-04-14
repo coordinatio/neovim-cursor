@@ -13,6 +13,8 @@
 -- - Cleanup callbacks notify tabs.lua when terminals exit
 -- - Buffer-local keybindings are set up for each terminal
 --
+local config_module = require("neovim-cursor.config")
+
 local M = {}
 
 -- State tracking for multiple terminals
@@ -125,8 +127,9 @@ end
 
 -- Create a new terminal instance (reusable function for creating terminals)
 -- This is the extracted logic that can be used for multiple terminals
-local function create_terminal_instance(id, config)
-  -- Initialize terminal state if it doesn't exist
+local function create_terminal_instance(id, config, command)
+  command = config_module.resolve_command(command, config)
+
   if not terminals[id] then
     terminals[id] = {
       buf = nil,
@@ -138,14 +141,11 @@ local function create_terminal_instance(id, config)
 
   local term = terminals[id]
 
-  -- Create a new buffer
   term.buf = vim.api.nvim_create_buf(false, true)
 
-  -- Show the window
   show(id, config)
 
-  -- Start the terminal
-  term.job_id = vim.fn.termopen(config.command, {
+  term.job_id = vim.fn.termopen(command, {
     on_exit = function(_, exit_code, _)
       -- Clean up state when terminal exits
       term.job_id = nil
@@ -266,19 +266,16 @@ local function create(config)
 end
 
 -- Toggle terminal visibility
-function M.toggle(config, id)
+function M.toggle(config, id, command)
   id = id or active_id or default_id
   
   if is_visible(id) then
-    -- Terminal is visible, hide it
     hide(id)
   elseif is_buffer_valid(id) and M.is_running(id) then
-    -- Terminal exists but is hidden, show it
     show(id, config)
     vim.cmd("startinsert")
   else
-    -- Terminal doesn't exist or isn't running, create it
-    create_terminal_instance(id, config)
+    create_terminal_instance(id, config, command)
   end
 end
 

@@ -4,6 +4,10 @@
 -- - Creating a new markdown file in ${CWD}/.nvim-cursor/history/ with timestamp in filename
 -- - Sending the current file contents to cursor-agent
 --
+local terminal = require("neovim-cursor.terminal")
+local tabs = require("neovim-cursor.tabs")
+local picker = require("neovim-cursor.picker")
+
 local M = {}
 
 -- Create history directory path (relative to CWD)
@@ -215,39 +219,65 @@ function M.send_prompt_file_to_agent(config)
     end)
   end
 
-  local terminal = require("neovim-cursor.terminal")
-  local tabs = require("neovim-cursor.tabs")
-
   if not tabs.has_terminals() then
-    tabs.create_terminal(nil, config)
-  else
-    local last_id = tabs.get_last()
-    if last_id then
-      local state = terminal.get_state(last_id)
-      if not state.is_visible then
-        terminal.toggle(config, last_id)
-      else
-        if state.win and vim.api.nvim_win_is_valid(state.win) then
-          vim.api.nvim_set_current_win(state.win)
-          vim.cmd("startinsert")
+    picker.pick_command(config, function(cmd)
+      tabs.create_terminal(nil, config, cmd)
+      local text_to_send = current_buffer_text(buf)
+      vim.defer_fn(function()
+        local active_id = tabs.get_active()
+        if active_id and terminal.is_running(active_id) then
+          local sent = terminal.send_text(text_to_send, active_id)
+          if sent then
+            vim.notify("Sent current file contents to agent", vim.log.levels.INFO)
+            close_sent_prompt_buffer_if_needed(source_buf, config)
+          end
         end
-      end
-    else
-      tabs.create_terminal(nil, config)
-    end
+      end, 200)
+    end)
+    return
   end
 
-  local text_to_send = current_buffer_text(buf)
-  vim.defer_fn(function()
-    local active_id = tabs.get_active()
-    if active_id and terminal.is_running(active_id) then
-      local sent = terminal.send_text(text_to_send, active_id)
-      if sent then
-        vim.notify("Sent current file contents to agent", vim.log.levels.INFO)
-        close_sent_prompt_buffer_if_needed(source_buf, config)
+  local last_id = tabs.get_last()
+  if last_id then
+    local t_state = terminal.get_state(last_id)
+    local term_meta = tabs.get_terminal(last_id)
+    local stored_cmd = term_meta and term_meta.command
+    if not t_state.is_visible then
+      terminal.toggle(config, last_id, stored_cmd)
+    else
+      if t_state.win and vim.api.nvim_win_is_valid(t_state.win) then
+        vim.api.nvim_set_current_win(t_state.win)
+        vim.cmd("startinsert")
       end
     end
-  end, 100)
+
+    local text_to_send = current_buffer_text(buf)
+    vim.defer_fn(function()
+      local active_id = tabs.get_active()
+      if active_id and terminal.is_running(active_id) then
+        local sent = terminal.send_text(text_to_send, active_id)
+        if sent then
+          vim.notify("Sent current file contents to agent", vim.log.levels.INFO)
+          close_sent_prompt_buffer_if_needed(source_buf, config)
+        end
+      end
+    end, 100)
+  else
+    picker.pick_command(config, function(cmd)
+      tabs.create_terminal(nil, config, cmd)
+      local text_to_send = current_buffer_text(buf)
+      vim.defer_fn(function()
+        local active_id = tabs.get_active()
+        if active_id and terminal.is_running(active_id) then
+          local sent = terminal.send_text(text_to_send, active_id)
+          if sent then
+            vim.notify("Sent current file contents to agent", vim.log.levels.INFO)
+            close_sent_prompt_buffer_if_needed(source_buf, config)
+          end
+        end
+      end, 200)
+    end)
+  end
 end
 
 -- Return full path of the most recent prompt file in history (by timestamp in filename).
@@ -414,22 +444,21 @@ function M.send_prompt_file_to_new_agent(config)
     end)
   end
 
-  local terminal = require("neovim-cursor.terminal")
-  local tabs = require("neovim-cursor.tabs")
-
-  tabs.create_terminal(nil, config)
-
   local text_to_send = current_buffer_text(buf)
-  vim.defer_fn(function()
-    local active_id = tabs.get_active()
-    if active_id and terminal.is_running(active_id) then
-      local sent = terminal.send_text(text_to_send, active_id)
-      if sent then
-        vim.notify("Sent current file contents to new agent", vim.log.levels.INFO)
-        close_sent_prompt_buffer_if_needed(source_buf, config)
+
+  picker.pick_command(config, function(cmd)
+    tabs.create_terminal(nil, config, cmd)
+    vim.defer_fn(function()
+      local active_id = tabs.get_active()
+      if active_id and terminal.is_running(active_id) then
+        local sent = terminal.send_text(text_to_send, active_id)
+        if sent then
+          vim.notify("Sent current file contents to new agent", vim.log.levels.INFO)
+          close_sent_prompt_buffer_if_needed(source_buf, config)
+        end
       end
-    end
-  end, 100)
+    end, 200)
+  end)
 end
 
 return M

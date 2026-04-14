@@ -12,6 +12,7 @@
 -- - Cleanup callbacks ensure state stays synchronized when terminals exit
 --
 local terminal = require("neovim-cursor.terminal")
+local config_module = require("neovim-cursor.config")
 
 local M = {}
 
@@ -66,24 +67,24 @@ end
 -- @param name (optional) Custom name for the terminal
 -- @param config Configuration object
 -- @return terminal_id The ID of the created terminal
-function M.create_terminal(name, config)
+function M.create_terminal(name, config, command)
   local id = generate_id()
   
-  -- Generate name if not provided
   if not name or name == "" then
     name = generate_name(config)
   end
+
+  local cmd = config_module.resolve_command(command, config)
   
-  -- Store terminal metadata
   state.terminals[id] = {
     id = id,
     name = name,
+    command = cmd,
     created_at = os.time(),
     last_active = os.time(),
   }
   
-  -- Create the actual terminal instance
-  terminal._create_terminal_instance(id, config)
+  terminal._create_terminal_instance(id, config, cmd)
   
   -- Set as active and last terminal
   state.active_id = id
@@ -145,10 +146,9 @@ function M.switch_to(id, config)
   
   -- Show the new terminal
   if terminal.is_running(id) then
-    terminal.toggle(config, id)  -- This will show it if hidden
+    terminal.toggle(config, id)
   else
-    -- Terminal died, recreate it
-    terminal._create_terminal_instance(id, config)
+    terminal._create_terminal_instance(id, config, state.terminals[id].command)
   end
   
   return true
