@@ -295,6 +295,13 @@ function M.send_text(text, id)
       text = text .. "\n"
     end
     vim.api.nvim_chan_send(term.job_id, text)
+
+    -- Focus terminal window and enter insert mode
+    if term.win and vim.api.nvim_win_is_valid(term.win) then
+      vim.api.nvim_set_current_win(term.win)
+      vim.cmd("startinsert")
+    end
+
     return true
   end
 
