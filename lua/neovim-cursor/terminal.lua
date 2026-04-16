@@ -247,7 +247,7 @@ local function create_terminal_instance(id, config, command)
   end
 
   -- Enter insert mode in terminal
-  vim.cmd("startinsert")
+  vim.schedule(function() vim.cmd("startinsert") end)
 
   -- Set this as the active terminal
   active_id = id
@@ -273,7 +273,7 @@ function M.toggle(config, id, command)
     hide(id)
   elseif is_buffer_valid(id) and M.is_running(id) then
     show(id, config)
-    vim.cmd("startinsert")
+    vim.schedule(function() vim.cmd("startinsert") end)
   else
     create_terminal_instance(id, config, command)
   end
@@ -299,7 +299,7 @@ function M.send_text(text, id)
     -- Focus terminal window and enter insert mode
     if term.win and vim.api.nvim_win_is_valid(term.win) then
       vim.api.nvim_set_current_win(term.win)
-      vim.cmd("startinsert")
+      vim.schedule(function() vim.cmd("startinsert") end)
     end
 
     return true
