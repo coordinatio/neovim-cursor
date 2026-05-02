@@ -3,13 +3,13 @@ local M = {}
 
 M.defaults = {
   -- Keybinding for toggling cursor agent (backward compatibility)
-  keybinding = "<leader>ai",
+  keybinding = "<A-->",
 
   -- Multi-terminal keybindings
   keybindings = {
-    toggle = "<leader>ai",           -- Toggle agent window (show last active)
+    toggle = "<A-->",                -- Toggle agent window (show last active)
     new = "<leader>an",              -- Create new agent terminal
-    select = "<leader>at",           -- Select agent terminal (fuzzy picker)
+    select = "<F6>",                 -- Select agent terminal (fuzzy picker)
     rename = "<leader>ar",           -- Rename current agent terminal
     prompt_new = "<leader>ah",       -- Create new prompt file in .nvim-cursor/history
     prompt_send = "<leader>ae",      -- Send current file contents to agent
@@ -49,10 +49,10 @@ M.defaults = {
 
   -- Terminal mode keybindings (when inside terminal buffer)
   terminal_keybindings = {
-    hide = "<Esc>",      -- Hide terminal window (terminal + normal mode in terminal)
-    new = "<C-n>",       -- Create new agent terminal
-    rename = "<C-r>",    -- Rename current agent window
-    select = "<C-t>",    -- Select agent terminal
+    hide = "<A-->",      -- Hide terminal window (terminal + normal mode in terminal)
+    new = "<F7>",        -- Create new agent terminal
+    rename = "<F2>",     -- Rename current agent window
+    select = "<F6>",     -- Select agent terminal
     prompt_last = "<F12>", -- Open or switch to last prompt buffer
   },
 }

@@ -5,7 +5,7 @@
 -- - Managing terminal visibility (show/hide)
 -- - Sending text to terminal buffers
 -- - Terminal lifecycle (on_exit callbacks)
--- - Terminal mode keybindings (<Esc>, <C-n>, <C-t>, <C-r>)
+-- - Terminal mode keybindings (<A-->, <F7>, <F6>, <F2>)
 --
 -- Architecture:
 -- - Stores terminal instances with buffers, windows, and job IDs
@@ -176,13 +176,7 @@ local function create_terminal_instance(id, config, command)
   })
 
   -- Get terminal keybindings from config (with defaults)
-  local term_keys = vim.tbl_deep_extend("force", {
-    hide = "<Esc>",
-    new = "<C-n>",
-    rename = "<C-r>",
-    select = "<C-t>",
-    prompt_last = "<F12>",
-  }, config.terminal_keybindings or {})
+  local term_keys = vim.tbl_deep_extend("force", {}, config_module.defaults.terminal_keybindings, config.terminal_keybindings or {})
 
   -- Backward compatibility: if someone only set `exit`, treat it as `hide`.
   if (term_keys.hide == nil or term_keys.hide == "") and term_keys.exit and term_keys.exit ~= "" then

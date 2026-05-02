@@ -20,7 +20,7 @@ local M = {}
 local state = {
   terminals = {},      -- Table of terminal metadata keyed by ID
   active_id = nil,     -- Currently active terminal ID (shown in window)
-  last_id = nil,       -- Last active terminal ID (used for smart toggle with <leader>ai)
+  last_id = nil,       -- Last active terminal ID (used for smart toggle)
   counter = 0,         -- Counter for generating unique IDs (increments for each new terminal)
 }
 

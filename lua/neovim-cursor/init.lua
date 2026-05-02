@@ -258,19 +258,7 @@ function M.setup(user_config)
   -- Merge user config with defaults
   config = config_module.setup(user_config)
 
-  -- Support backward compatibility: if keybindings table not provided, use old keybinding
-  local keybindings = config.keybindings or {
-    toggle = config.keybinding or "<leader>ai",
-    new = "<leader>an",
-    select = "<leader>at",
-    rename = "<leader>ar",
-    prompt_new = "<leader>ah",
-    prompt_send = "<leader>ae",
-    prompt_send_new = "<leader>aE",
-    prompt_history_telescope = "<leader>aH",
-    prompt_last = "<leader>al",
-    copy_link = "<leader>ac",
-  }
+  local keybindings = config.keybindings
 
   -- Set up keybindings for toggle (skip if binding is empty string)
   if keybindings.toggle and keybindings.toggle ~= "" then

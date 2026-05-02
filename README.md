@@ -10,7 +10,7 @@ This was created using Cursor in ~20 minutes; it doesn't have to be perfect, jus
 
 ## Features
 
-- 🚀 Toggle a vertical split terminal running the Cursor agent CLI with `<leader>ai`
+- 🚀 Toggle a vertical split terminal running the Cursor agent CLI with `<A-->`
 - 🎛️ **Manage multiple AI agent sessions simultaneously**
 - 🔍 **Fuzzy finder with live preview** (Telescope integration)
 - ✏️ **Rename and organize** agent terminals for different tasks
@@ -71,11 +71,11 @@ EOF
 
 ### Quick Start
 
-1. **Open/Toggle Agent**: Press `<leader>ai` in normal mode
+1. **Open/Toggle Agent**: Press `<A-->` in normal mode
    - First time: Creates your first agent terminal
    - After that: Toggles (show/hide) the last active agent
 2. **Create New Agent**: Press `<leader>an` to create additional agent terminals
-3. **Switch Agents**: Press `<leader>at` to open a fuzzy picker with live preview
+3. **Switch Agents**: Press `<F6>` to open a fuzzy picker with live preview
 4. **Rename Agent**: Press `<leader>ar` to rename the current agent terminal
 
 ### Multi-Terminal Management
@@ -86,9 +86,9 @@ Work with multiple AI agents simultaneously for different tasks:
 
 | Keybinding | Action |
 |------------|--------|
-| `<leader>ai` | Smart toggle - create first agent or show last active |
+| `<A-->` | Smart toggle - create first agent or show last active |
 | `<leader>an` | Create new agent terminal with custom prompt |
-| `<leader>at` | Select agent from fuzzy picker (with live preview) |
+| `<F6>` | Select agent from fuzzy picker (with live preview) |
 | `<leader>ar` | Rename current agent terminal |
 | `<leader>ah` | Create new prompt file in `.nvim-cursor/history/` (timestamp in filename) |
 | `<leader>ae` | Send current file contents to agent |
@@ -109,10 +109,10 @@ When you're inside an agent terminal, you can manage agents without leaving:
 
 | Keybinding | Action |
 |------------|--------|
-| `<Esc>` | Exit terminal mode / hide agent window |
-| `<C-n>` | Create new agent terminal |
-| `<C-t>` | Select agent from fuzzy picker |
-| `<C-r>` | Rename current agent terminal |
+| `<A-->` | Exit terminal mode / hide agent window |
+| `<F7>` | Create new agent terminal |
+| `<F6>` | Select agent from fuzzy picker |
+| `<F2>` | Rename current agent terminal |
 | `<F12>` | Open or switch to last prompt file from history |
 
 > **Note:** All terminal mode keybindings are configurable via `terminal_keybindings` option (see Configuration section).
@@ -120,14 +120,14 @@ When you're inside an agent terminal, you can manage agents without leaving:
 #### Example Workflow
 
 ```
-1. Press <leader>ai → Creates "Agent 1"
+1. Press <A--> → Creates "Agent 1"
 2. Ask: "Help me debug this authentication issue"
-3. Press <C-n> → Prompt appears
+3. Press <F7> → Prompt appears
 4. Type: "Review my database schema"
 5. Now you have two agents running!
-6. Press <C-t> → Telescope shows both with live preview
+6. Press <F6> → Telescope shows both with live preview
 7. Navigate and press Enter to switch
-8. Press <C-r> → Rename to "Auth Debug" and "Schema Review"
+8. Press <F2> → Rename to "Auth Debug" and "Schema Review"
 ```
 
 ### Visual Mode
@@ -135,7 +135,7 @@ When you're inside an agent terminal, you can manage agents without leaving:
 **Send code selections to your active agent:**
 
 1. Select text in visual mode (v, V, or Ctrl-v)
-2. Press `<leader>ai`
+2. Press `<A-->`
 3. The plugin will:
    - Toggle the agent terminal (show it)
    - Send the file path with line range (e.g., `@file.lua:10-20`)
@@ -215,9 +215,9 @@ The plugin provides comprehensive commands for all operations:
 require("neovim-cursor").setup({
   -- Multi-terminal keybindings (all configurable)
   keybindings = {
-    toggle = "<leader>ai",           -- Toggle agent window (show last active)
+    toggle = "<A-->",                -- Toggle agent window (show last active)
     new = "<leader>an",              -- Create new agent terminal
-    select = "<leader>at",           -- Select agent terminal (fuzzy picker)
+    select = "<F6>",                 -- Select agent terminal (fuzzy picker)
     rename = "<leader>ar",           -- Rename current agent terminal
     prompt_new = "<leader>ah",       -- Create new prompt file in .nvim-cursor/history
     prompt_send = "<leader>ae",      -- Send current file contents to agent
@@ -263,10 +263,10 @@ require("neovim-cursor").setup({
 
   -- Terminal mode keybindings (when inside terminal buffer)
   terminal_keybindings = {
-    hide = "<Esc>",      -- Hide terminal window (terminal + normal mode in terminal)
-    new = "<C-n>",       -- Create new agent terminal
-    rename = "<C-r>",    -- Rename current agent terminal
-    select = "<C-t>",    -- Select agent terminal
+    hide = "<A-->",      -- Hide terminal window (terminal + normal mode in terminal)
+    new = "<F7>",        -- Create new agent terminal
+    rename = "<F2>",     -- Rename current agent terminal
+    select = "<F6>",     -- Select agent terminal
     prompt_last = "<F12>", -- Open or switch to last prompt buffer
   },
 })
@@ -366,7 +366,7 @@ The old `keybinding` option is still supported for backward compatibility:
 
 ```lua
 require("neovim-cursor").setup({
-  keybinding = "<leader>ai",  -- Still works, sets the toggle keybinding
+  keybinding = "<A-->",  -- Still works, sets the toggle keybinding
 })
 ```
 
@@ -447,14 +447,14 @@ Use descriptive names to organize agents by task:
 ### Efficient Workflows
 
 1. **Keep agents focused**: Create separate agents for different contexts instead of mixing topics in one
-2. **Use terminal mode shortcuts**: Stay in terminal mode with `<C-n>`, `<C-t>`, `<C-r>` for faster navigation
-3. **Leverage the preview**: Use `<C-t>` to preview conversations before switching
-4. **Name early**: Rename agents as soon as you know their purpose with `<C-r>`
+2. **Use terminal mode shortcuts**: Stay in terminal mode with `<F7>`, `<F6>`, `<F2>` for faster navigation
+3. **Leverage the preview**: Use `<F6>` to preview conversations before switching
+4. **Name early**: Rename agents as soon as you know their purpose with `<F2>`
 
 ### Telescope Integration
 
 For the best experience, install [telescope.nvim](https://github.com/nvim-telescope/telescope.nvim). With Telescope you get:
-- **Agent picker** (`<leader>at`): live preview of agent conversations, fuzzy search by name, rename with `<C-r>`
+- **Agent picker** (`<F6>`): live preview of agent conversations, fuzzy search by name, rename with `<F2>`
 - **Prompt history** (`<leader>aH`): browse `.nvim-cursor/history/` with `find_files` in that directory
 
 Without Telescope, the agent picker falls back to `vim.ui.select` (still functional, just less features). The prompt history command will show a warning if Telescope is not available.
@@ -470,11 +470,11 @@ Without Telescope, the agent picker falls back to `vim.ui.select` (still functio
 ### Keybinding doesn't work
 
 - Make sure `<leader>` is set in your config (e.g., `vim.g.mapleader = " "`)
-- Check for conflicting keybindings with `:verbose map <leader>ai`
+- Check for conflicting keybindings with `:verbose map <A-->`
 
 ### Visual selection not working
 
-- Ensure you're pressing `<leader>ai` while still in visual mode
+- Ensure you're pressing `<A-->` while still in visual mode
 - The selection will be sent after the terminal opens/shows
 
 ## Contributing
