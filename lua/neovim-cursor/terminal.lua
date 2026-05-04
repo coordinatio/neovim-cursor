@@ -2,55 +2,70 @@
 --
 -- This module handles the low-level terminal operations:
 -- - Creating terminal buffers and windows
--- - Managing terminal visibility (show/hide)
+-- - Managing terminal visibility (show/hide) for both split and fullscreen modes
 -- - Sending text to terminal buffers
 -- - Terminal lifecycle (on_exit callbacks)
--- - Terminal mode keybindings (<A-->, <F7>, <F6>, <F2>)
+-- - Terminal mode keybindings (configured by user)
 --
 -- Architecture:
--- - Stores terminal instances with buffers, windows, and job IDs
+-- - Stores terminal instances with buffers, windows, job IDs, and last
+--   used display_mode ("split" | "fullscreen")
 -- - Supports multiple terminals with unique IDs
+-- - Tracks at most one fullscreen terminal at a time (singleton state)
 -- - Cleanup callbacks notify tabs.lua when terminals exit
--- - Buffer-local keybindings are set up for each terminal
 --
 local config_module = require("neovim-cursor.config")
+local util = require("neovim-cursor.util")
 
 local M = {}
 
 -- State tracking for multiple terminals
-local terminals = {}  -- Table of terminal instances keyed by ID (stores buf, win, job_id)
+local terminals = {}  -- Table of terminal instances keyed by ID
 local active_id = nil  -- Currently active terminal ID
 local default_id = "default"  -- Default terminal ID for backward compatibility
-local cleanup_callbacks = {}  -- Callbacks to call when a terminal exits (used by tabs.lua for state sync)
+local cleanup_callbacks = {}  -- Callbacks called when a terminal exits (used by tabs.lua)
 
--- Get a terminal instance by ID (defaults to active or default terminal)
+-- Fullscreen mode singleton state.
+-- At most one terminal can be displayed fullscreen at a time because
+-- "fullscreen" simply means "took over a window that was showing something
+-- else". The saved_win/saved_buf pair lets us hand the window back.
+local fullscreen_state = {
+  active = false,       -- True while a terminal is mounted in saved_win
+  terminal_id = nil,    -- ID of the terminal mounted fullscreen
+  saved_win = nil,      -- Window we took over
+  saved_buf = nil,      -- Buffer that was in saved_win before we took over
+}
+
+local function reset_fullscreen_state()
+  fullscreen_state.active = false
+  fullscreen_state.terminal_id = nil
+  fullscreen_state.saved_win = nil
+  fullscreen_state.saved_buf = nil
+end
+
 local function get_terminal(id)
   id = id or active_id or default_id
   return terminals[id]
 end
 
--- Check if terminal is currently visible
 local function is_visible(id)
   local term = get_terminal(id)
   if not term then return false end
   return term.win ~= nil and vim.api.nvim_win_is_valid(term.win)
 end
 
--- Check if terminal buffer exists and is valid
 local function is_buffer_valid(id)
   local term = get_terminal(id)
   if not term then return false end
   return term.buf ~= nil and vim.api.nvim_buf_is_valid(term.buf)
 end
 
--- Check if terminal is running
 function M.is_running(id)
   if not is_buffer_valid(id) then
     return false
   end
 
   local term = get_terminal(id)
-  -- Check if job is still running
   if term and term.job_id then
     local job_info = vim.fn.jobwait({term.job_id}, 0)
     return job_info[1] == -1  -- -1 means still running
@@ -59,7 +74,31 @@ function M.is_running(id)
   return false
 end
 
--- Hide the terminal window
+-- Verify the fullscreen window still actually shows the tracked terminal.
+-- The user can move things out from under us (e.g. `:b otherfile`); when
+-- that happens we treat fullscreen as no longer active.
+local function fullscreen_window_still_valid()
+  if not fullscreen_state.active then return false end
+  if not fullscreen_state.saved_win
+    or not vim.api.nvim_win_is_valid(fullscreen_state.saved_win) then
+    return false
+  end
+  local term = get_terminal(fullscreen_state.terminal_id)
+  if not term or not term.buf or not vim.api.nvim_buf_is_valid(term.buf) then
+    return false
+  end
+  return vim.api.nvim_win_get_buf(fullscreen_state.saved_win) == term.buf
+end
+
+-- Reconcile fullscreen_state with reality. Call before reading or acting on it.
+local function sync_fullscreen_state()
+  if fullscreen_state.active and not fullscreen_window_still_valid() then
+    local stale_term = get_terminal(fullscreen_state.terminal_id)
+    if stale_term then stale_term.win = nil end
+    reset_fullscreen_state()
+  end
+end
+
 local function hide(id)
   id = id or active_id or default_id
   if is_visible(id) then
@@ -71,12 +110,65 @@ local function hide(id)
   end
 end
 
--- Expose hide function for keymaps
 function M.hide(id)
   hide(id)
 end
 
--- Show the terminal window
+local function show_fullscreen(id)
+  local term = get_terminal(id)
+  if not term or not term.buf then return false end
+
+  local current_win = vim.api.nvim_get_current_win()
+  local current_buf = vim.api.nvim_win_get_buf(current_win)
+
+  if vim.bo[current_buf].buftype ~= "terminal" then
+    fullscreen_state.saved_buf = current_buf
+  else
+    fullscreen_state.saved_buf = util.find_or_create_restore_buffer(current_buf)
+  end
+
+  fullscreen_state.saved_win = current_win
+  fullscreen_state.terminal_id = id
+  fullscreen_state.active = true
+
+  vim.api.nvim_win_set_buf(current_win, term.buf)
+  term.win = current_win
+  term.display_mode = "fullscreen"
+  active_id = id
+  return true
+end
+
+local function hide_fullscreen()
+  sync_fullscreen_state()
+  if not fullscreen_state.active then return end
+
+  if fullscreen_state.saved_win and vim.api.nvim_win_is_valid(fullscreen_state.saved_win) then
+    local win = fullscreen_state.saved_win
+    local replacement = fullscreen_state.saved_buf
+    if not replacement or not vim.api.nvim_buf_is_valid(replacement) then
+      replacement = util.find_or_create_restore_buffer()
+    end
+    vim.api.nvim_win_set_buf(win, replacement)
+  end
+
+  local term = get_terminal(fullscreen_state.terminal_id)
+  if term then term.win = nil end
+
+  reset_fullscreen_state()
+end
+
+function M.is_fullscreen_active(id)
+  sync_fullscreen_state()
+  if id then
+    return fullscreen_state.active and fullscreen_state.terminal_id == id
+  end
+  return fullscreen_state.active
+end
+
+function M.hide_fullscreen()
+  hide_fullscreen()
+end
+
 local function show(id, config)
   id = id or active_id or default_id
   if not is_buffer_valid(id) then
@@ -88,7 +180,6 @@ local function show(id, config)
     return false
   end
 
-  -- Calculate split size
   local size
   if config.split.position == "right" or config.split.position == "left" then
     size = math.floor(vim.o.columns * config.split.size)
@@ -96,7 +187,6 @@ local function show(id, config)
     size = math.floor(vim.o.lines * config.split.size)
   end
 
-  -- Create the split
   local split_cmd
   if config.split.position == "right" then
     split_cmd = "rightbelow vsplit"
@@ -112,22 +202,25 @@ local function show(id, config)
   term.win = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(term.win, term.buf)
 
-  -- Set window size
   if config.split.position == "right" or config.split.position == "left" then
     vim.api.nvim_win_set_width(term.win, size)
   else
     vim.api.nvim_win_set_height(term.win, size)
   end
 
-  -- Update active terminal
+  term.display_mode = "split"
   active_id = id
 
   return true
 end
 
--- Create a new terminal instance (reusable function for creating terminals)
--- This is the extracted logic that can be used for multiple terminals
-local function create_terminal_instance(id, config, command)
+-- Create a new terminal instance (reusable function for creating terminals).
+-- @param id string Terminal ID
+-- @param config table Plugin config
+-- @param command string|nil Command to run (resolved via config_module if nil)
+-- @param display_mode string|nil "split" (default) or "fullscreen"
+local function create_terminal_instance(id, config, command, display_mode)
+  display_mode = display_mode or "split"
   command = config_module.resolve_command(command, config)
 
   if not terminals[id] then
@@ -136,18 +229,32 @@ local function create_terminal_instance(id, config, command)
       win = nil,
       job_id = nil,
       id = id,
+      display_mode = display_mode,
     }
   end
 
   local term = terminals[id]
-
+  term.display_mode = display_mode
   term.buf = vim.api.nvim_create_buf(false, true)
 
-  show(id, config)
+  if display_mode == "fullscreen" then
+    show_fullscreen(id)
+  else
+    show(id, config)
+  end
 
   term.job_id = vim.fn.termopen(command, {
     on_exit = function(_, exit_code, _)
-      -- Clean up state when terminal exits
+      -- Capture fullscreen state before clearing it; we may need to restore
+      -- the user's window after the buffer is gone.
+      local was_fullscreen = fullscreen_state.active and fullscreen_state.terminal_id == id
+      local fs_saved_win = fullscreen_state.saved_win
+      local fs_saved_buf = fullscreen_state.saved_buf
+
+      if was_fullscreen then
+        reset_fullscreen_state()
+      end
+
       term.job_id = nil
       if term.buf and vim.api.nvim_buf_is_valid(term.buf) then
         vim.api.nvim_buf_delete(term.buf, { force = true })
@@ -155,56 +262,59 @@ local function create_terminal_instance(id, config, command)
       term.buf = nil
       term.win = nil
 
-      -- Remove terminal from table
       terminals[id] = nil
 
-      -- Clear active_id if this was the active terminal
       if active_id == id then
         active_id = nil
       end
 
-      -- Call cleanup callbacks (for tabs module to sync)
       for _, callback in ipairs(cleanup_callbacks) do
         pcall(callback, id, exit_code)
       end
 
-      -- Call user callback if provided
       if config.term_opts.on_close then
         config.term_opts.on_close(exit_code)
+      end
+
+      if was_fullscreen then
+        vim.schedule(function()
+          if fs_saved_win and vim.api.nvim_win_is_valid(fs_saved_win) then
+            local replacement = fs_saved_buf
+            if not replacement or not vim.api.nvim_buf_is_valid(replacement) then
+              replacement = util.find_or_create_restore_buffer()
+            end
+            vim.api.nvim_win_set_buf(fs_saved_win, replacement)
+          end
+        end)
       end
     end,
   })
 
-  -- Get terminal keybindings from config (with defaults)
   local term_keys = vim.tbl_deep_extend("force", {}, config_module.defaults.terminal_keybindings, config.terminal_keybindings or {})
 
   -- Backward compatibility: if someone only set `exit`, treat it as `hide`.
   if (term_keys.hide == nil or term_keys.hide == "") and term_keys.exit and term_keys.exit ~= "" then
     term_keys.hide = term_keys.exit
   end
-
   -- Always use one key for both actions.
   term_keys.exit = term_keys.hide
 
-  -- Set up buffer-local keymaps for terminal mode (skip if binding is empty string)
   if term_keys.exit and term_keys.exit ~= "" then
-    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.exit, '<C-\\><C-n>:lua require("neovim-cursor.terminal").hide()<CR>', {
+    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.exit, '<C-\\><C-n>:lua require("neovim-cursor").hide_from_terminal_handler()<CR>', {
       noremap = true,
       silent = true,
       desc = "Hide terminal window"
     })
   end
 
-  -- Set up buffer-local keymap for normal mode in terminal
   if term_keys.hide and term_keys.hide ~= "" then
-    vim.api.nvim_buf_set_keymap(term.buf, 'n', term_keys.hide, ':lua require("neovim-cursor.terminal").hide()<CR>', {
+    vim.api.nvim_buf_set_keymap(term.buf, 'n', term_keys.hide, ':lua require("neovim-cursor").hide_from_terminal_handler()<CR>', {
       noremap = true,
       silent = true,
       desc = "Hide terminal window"
     })
   end
 
-  -- Set up buffer-local keymap for creating new terminal from terminal mode
   if term_keys.new and term_keys.new ~= "" then
     vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.new, '<C-\\><C-n>:lua require("neovim-cursor").new_terminal_from_terminal_handler()<CR>', {
       noremap = true,
@@ -213,7 +323,6 @@ local function create_terminal_instance(id, config, command)
     })
   end
 
-  -- Set up buffer-local keymap for renaming current terminal from terminal mode
   if term_keys.rename and term_keys.rename ~= "" then
     vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.rename, '<C-\\><C-n>:lua require("neovim-cursor").rename_terminal_handler()<CR>', {
       noremap = true,
@@ -222,7 +331,6 @@ local function create_terminal_instance(id, config, command)
     })
   end
 
-  -- Set up buffer-local keymap for selecting terminal from terminal mode
   if term_keys.select and term_keys.select ~= "" then
     vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.select, '<C-\\><C-n>:lua require("neovim-cursor").select_terminal_handler()<CR>', {
       noremap = true,
@@ -231,7 +339,6 @@ local function create_terminal_instance(id, config, command)
     })
   end
 
-  -- Set up buffer-local keymap for opening/switching last prompt from terminal mode
   if term_keys.prompt_last and term_keys.prompt_last ~= "" then
     vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.prompt_last, '<C-\\><C-n>:lua require("neovim-cursor").open_last_prompt_from_terminal_handler()<CR>', {
       noremap = true,
@@ -240,13 +347,23 @@ local function create_terminal_instance(id, config, command)
     })
   end
 
-  -- Enter insert mode in terminal
+  if term_keys.toggle_fullscreen and term_keys.toggle_fullscreen ~= "" then
+    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.toggle_fullscreen, '<C-\\><C-n>:lua require("neovim-cursor").fullscreen_toggle_from_terminal_handler()<CR>', {
+      noremap = true,
+      silent = true,
+      desc = "Toggle fullscreen agent mode"
+    })
+    vim.api.nvim_buf_set_keymap(term.buf, 'n', term_keys.toggle_fullscreen, ':lua require("neovim-cursor").fullscreen_toggle_from_terminal_handler()<CR>', {
+      noremap = true,
+      silent = true,
+      desc = "Toggle fullscreen agent mode"
+    })
+  end
+
   vim.schedule(function() vim.cmd("startinsert") end)
 
-  -- Set this as the active terminal
   active_id = id
 
-  -- Call user callback if provided
   if config.term_opts.on_open then
     config.term_opts.on_open()
   end
@@ -254,29 +371,111 @@ local function create_terminal_instance(id, config, command)
   return term
 end
 
--- Create a new terminal (uses default ID for backward compatibility)
-local function create(config)
-  return create_terminal_instance(default_id, config)
-end
-
--- Toggle terminal visibility
+-- Toggle terminal visibility.
+--
+-- Semantics:
+--   - If the terminal is visible (in any mode) → hide it.
+--   - Otherwise → show it in split mode (creating it if needed).
+--
+-- Pressing the split-toggle key while the terminal is fullscreen no longer
+-- silently demotes it to a split: it just hides, matching the expectation
+-- that "<A-->" toggles agent visibility.
 function M.toggle(config, id, command)
   id = id or active_id or default_id
-  
+  sync_fullscreen_state()
+
+  if fullscreen_state.active and fullscreen_state.terminal_id == id then
+    hide_fullscreen()
+    return
+  end
+
   if is_visible(id) then
     hide(id)
   elseif is_buffer_valid(id) and M.is_running(id) then
     show(id, config)
     vim.schedule(function() vim.cmd("startinsert") end)
   else
-    create_terminal_instance(id, config, command)
+    create_terminal_instance(id, config, command, "split")
+  end
+end
+
+-- Toggle a terminal in fullscreen mode.
+--
+-- Semantics:
+--   - If this terminal is already shown fullscreen → hide it (giving the
+--     window back to the user's previous buffer).
+--   - If it is shown in a split → hide the split, then take over the now
+--     focused window.
+--   - Otherwise → show it (creating if needed) in fullscreen mode.
+function M.toggle_fullscreen(config, id, command)
+  id = id or active_id or default_id
+  sync_fullscreen_state()
+
+  if fullscreen_state.active and fullscreen_state.terminal_id == id then
+    hide_fullscreen()
+    return
+  end
+
+  -- A different terminal is currently fullscreen; release that first
+  -- so we don't end up with two fullscreen entries fighting for state.
+  if fullscreen_state.active then
+    hide_fullscreen()
+  end
+
+  -- If this terminal is currently visible in a split, close that split.
+  -- After nvim_win_hide focus shifts to a remaining window, which is the
+  -- one we want to take over for fullscreen — no need for vim.schedule.
+  if is_visible(id) then
+    hide(id)
+  end
+
+  if is_buffer_valid(id) and M.is_running(id) then
+    show_fullscreen(id)
+    vim.schedule(function() vim.cmd("startinsert") end)
+  else
+    create_terminal_instance(id, config, command, "fullscreen")
+  end
+end
+
+-- Show the terminal in its preferred (last used) display mode.
+-- Used by callers that want to *make the agent visible* without toggling
+-- (e.g. send_prompt_file_to_agent), so the agent doesn't get demoted from
+-- fullscreen to split unexpectedly. No-op if already visible.
+function M.show_in_preferred_mode(config, id, command)
+  id = id or active_id or default_id
+  sync_fullscreen_state()
+
+  if fullscreen_state.active and fullscreen_state.terminal_id == id then
+    return
+  end
+  if is_visible(id) then
+    return
+  end
+
+  local term = get_terminal(id)
+  local mode = (term and term.display_mode) or "split"
+
+  if mode == "fullscreen" then
+    if is_buffer_valid(id) and M.is_running(id) then
+      show_fullscreen(id)
+      vim.schedule(function() vim.cmd("startinsert") end)
+    else
+      create_terminal_instance(id, config, command, "fullscreen")
+    end
+  else
+    if is_buffer_valid(id) and M.is_running(id) then
+      show(id, config)
+      vim.schedule(function() vim.cmd("startinsert") end)
+    else
+      create_terminal_instance(id, config, command, "split")
+    end
   end
 end
 
 -- Send text to the terminal
 function M.send_text(text, id)
   id = id or active_id or default_id
-  
+
   if not M.is_running(id) then
     vim.notify("Cursor agent terminal is not running", vim.log.levels.WARN)
     return false
@@ -284,13 +483,11 @@ function M.send_text(text, id)
 
   local term = get_terminal(id)
   if term and term.job_id then
-    -- Ensure text ends with newline
     if not text:match("\n$") then
       text = text .. "\n"
     end
     vim.api.nvim_chan_send(term.job_id, text)
 
-    -- Focus terminal window and enter insert mode
     if term.win and vim.api.nvim_win_is_valid(term.win) then
       vim.api.nvim_set_current_win(term.win)
       vim.schedule(function() vim.cmd("startinsert") end)
@@ -302,28 +499,37 @@ function M.send_text(text, id)
   return false
 end
 
--- Get terminal state (for debugging)
+-- Get terminal state (for debugging / coordination with other modules)
 function M.get_state(id)
   id = id or active_id or default_id
   local term = get_terminal(id)
-  
+
   if not term then
     return {
       id = id,
       exists = false,
       is_visible = false,
       is_running = false,
+      display_mode = nil,
     }
   end
-  
+
   return {
     id = id,
     buf = term.buf,
     win = term.win,
     job_id = term.job_id,
+    display_mode = term.display_mode,
     is_visible = is_visible(id),
     is_running = M.is_running(id),
   }
+end
+
+-- Get the last preferred display mode for a terminal.
+-- Returns "split" by default if the terminal is unknown.
+function M.get_display_mode(id)
+  local term = get_terminal(id)
+  return (term and term.display_mode) or "split"
 end
 
 -- Register a cleanup callback (called when terminal exits)
@@ -332,11 +538,10 @@ function M.register_cleanup_callback(callback)
   table.insert(cleanup_callbacks, callback)
 end
 
--- Expose internal functions for tabs module (Phase 1.4+)
+-- Expose internal functions for tabs module
 M._create_terminal_instance = create_terminal_instance
 M._get_terminal = get_terminal
 M._set_active = function(id) active_id = id end
 M._get_active_id = function() return active_id end
 
 return M
-

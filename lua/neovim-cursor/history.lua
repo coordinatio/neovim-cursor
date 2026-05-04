@@ -7,6 +7,7 @@
 local terminal = require("neovim-cursor.terminal")
 local tabs = require("neovim-cursor.tabs")
 local picker = require("neovim-cursor.picker")
+local util = require("neovim-cursor.util")
 
 local M = {}
 
@@ -112,33 +113,6 @@ local function is_plugin_prompt_file_buffer(buf, config)
   return parse_timestamp_from_filename(filename) ~= nil
 end
 
-local function find_replacement_file_buffer(excluded_buf)
-  for _, candidate in ipairs(vim.api.nvim_list_bufs()) do
-    if candidate ~= excluded_buf
-      and vim.api.nvim_buf_is_valid(candidate)
-      and vim.fn.buflisted(candidate) == 1
-      and vim.bo[candidate].buftype == ""
-      and vim.api.nvim_buf_get_name(candidate) ~= "" then
-      return candidate
-    end
-  end
-  return nil
-end
-
-local function find_empty_unnamed_buffer(excluded_buf)
-  for _, candidate in ipairs(vim.api.nvim_list_bufs()) do
-    if candidate ~= excluded_buf
-      and vim.api.nvim_buf_is_valid(candidate)
-      and vim.fn.buflisted(candidate) == 1
-      and vim.bo[candidate].buftype == ""
-      and vim.api.nvim_buf_get_name(candidate) == ""
-      and not vim.bo[candidate].modified then
-      return candidate
-    end
-  end
-  return nil
-end
-
 local function replace_prompt_in_open_windows(buf, replacement)
   for _, win in ipairs(vim.api.nvim_list_wins()) do
     if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == buf then
@@ -152,8 +126,8 @@ local function close_sent_prompt_buffer_if_needed(buf, config)
     return
   end
 
-  local replacement = find_replacement_file_buffer(buf) or find_empty_unnamed_buffer(buf)
-  
+  local replacement = util.find_file_buffer(buf) or util.find_empty_unnamed_buffer(buf)
+
   if not replacement then
     -- No valid buffer to switch to, leave the prompt buffer open
     return
@@ -201,83 +175,93 @@ local function current_buffer_text(buf)
   return text .. "\n"
 end
 
--- Send current buffer's file contents to cursor-agent.
--- Ensures at least one terminal exists and shows it, then sends the text.
--- Saves the current buffer if modified so the file exists on disk for the agent.
--- @param config Plugin config (for terminal/tabs)
-function M.send_prompt_file_to_agent(config)
+-- Send buffered text to whichever agent is currently active and report success.
+local function send_to_active_agent(text, source_buf, config, success_message)
+  local active_id = tabs.get_active()
+  if not active_id or not terminal.is_running(active_id) then
+    return
+  end
+  local sent = terminal.send_text(text, active_id)
+  if sent then
+    vim.notify(success_message or "Sent current file contents to agent", vim.log.levels.INFO)
+    close_sent_prompt_buffer_if_needed(source_buf, config)
+  end
+end
+
+-- Create a fresh terminal (via picker) and send `text` to it once it boots.
+local function pick_create_and_send(config, text, source_buf, success_message)
+  picker.pick_command(config, function(cmd)
+    tabs.create_terminal(nil, config, cmd)
+    vim.defer_fn(function()
+      send_to_active_agent(text, source_buf, config, success_message)
+    end, 200)
+  end)
+end
+
+local function current_file_text_or_notify()
   local buf = vim.api.nvim_get_current_buf()
-  local source_buf = buf
   local path = vim.api.nvim_buf_get_name(buf)
   if path == nil or path == "" then
     vim.notify("Current buffer has no file path (save the file first)", vim.log.levels.WARN)
-    return
+    return nil, nil
   end
   if vim.bo[buf].modified then
     vim.api.nvim_buf_call(buf, function()
       vim.cmd("write")
     end)
   end
+  return buf, current_buffer_text(buf)
+end
+
+-- Send current buffer's file contents to cursor-agent.
+-- Ensures at least one terminal exists and shows it (in its preferred
+-- display mode, so a fullscreen agent stays fullscreen), then sends the text.
+-- Saves the current buffer if modified so the file exists on disk for the agent.
+-- @param config Plugin config (for terminal/tabs)
+function M.send_prompt_file_to_agent(config)
+  local source_buf, text_to_send = current_file_text_or_notify()
+  if not source_buf then
+    return
+  end
 
   if not tabs.has_terminals() then
-    picker.pick_command(config, function(cmd)
-      tabs.create_terminal(nil, config, cmd)
-      local text_to_send = current_buffer_text(buf)
-      vim.defer_fn(function()
-        local active_id = tabs.get_active()
-        if active_id and terminal.is_running(active_id) then
-          local sent = terminal.send_text(text_to_send, active_id)
-          if sent then
-            vim.notify("Sent current file contents to agent", vim.log.levels.INFO)
-            close_sent_prompt_buffer_if_needed(source_buf, config)
-          end
-        end
-      end, 200)
-    end)
+    pick_create_and_send(config, text_to_send, source_buf)
     return
   end
 
   local last_id = tabs.get_last()
-  if last_id then
-    local t_state = terminal.get_state(last_id)
-    local term_meta = tabs.get_terminal(last_id)
-    local stored_cmd = term_meta and term_meta.command
-    if not t_state.is_visible then
-      terminal.toggle(config, last_id, stored_cmd)
-    else
-      if t_state.win and vim.api.nvim_win_is_valid(t_state.win) then
-        vim.api.nvim_set_current_win(t_state.win)
-        vim.cmd("startinsert")
-      end
-    end
-
-    local text_to_send = current_buffer_text(buf)
-    vim.defer_fn(function()
-      local active_id = tabs.get_active()
-      if active_id and terminal.is_running(active_id) then
-        local sent = terminal.send_text(text_to_send, active_id)
-        if sent then
-          vim.notify("Sent current file contents to agent", vim.log.levels.INFO)
-          close_sent_prompt_buffer_if_needed(source_buf, config)
-        end
-      end
-    end, 100)
-  else
-    picker.pick_command(config, function(cmd)
-      tabs.create_terminal(nil, config, cmd)
-      local text_to_send = current_buffer_text(buf)
-      vim.defer_fn(function()
-        local active_id = tabs.get_active()
-        if active_id and terminal.is_running(active_id) then
-          local sent = terminal.send_text(text_to_send, active_id)
-          if sent then
-            vim.notify("Sent current file contents to agent", vim.log.levels.INFO)
-            close_sent_prompt_buffer_if_needed(source_buf, config)
-          end
-        end
-      end, 200)
-    end)
+  if not last_id then
+    pick_create_and_send(config, text_to_send, source_buf)
+    return
   end
+
+  local t_state = terminal.get_state(last_id)
+  local term_meta = tabs.get_terminal(last_id)
+  local stored_cmd = term_meta and term_meta.command
+
+  if not t_state.is_visible then
+    -- Honor the agent's last preferred display mode (split or fullscreen).
+    terminal.show_in_preferred_mode(config, last_id, stored_cmd)
+  elseif t_state.win and vim.api.nvim_win_is_valid(t_state.win) then
+    vim.api.nvim_set_current_win(t_state.win)
+    vim.cmd("startinsert")
+  end
+
+  vim.defer_fn(function()
+    send_to_active_agent(text_to_send, source_buf, config)
+  end, 100)
+end
+
+-- Deprecated compatibility shim for CursorAgentPromptSendNew /
+-- keybindings.prompt_send_new. Creates a fresh split agent, then sends the
+-- current file contents to it.
+function M.send_prompt_file_to_new_agent(config)
+  local source_buf, text_to_send = current_file_text_or_notify()
+  if not source_buf then
+    return
+  end
+
+  pick_create_and_send(config, text_to_send, source_buf, "Sent current file contents to new agent")
 end
 
 -- Return full path of the most recent prompt file in history (by timestamp in filename).
@@ -427,38 +411,6 @@ function M.open_last_prompt_buffer(config)
   else
     vim.cmd("edit " .. vim.fn.fnameescape(path))
   end
-end
-
--- Like send_prompt_file_to_agent but creates a new cursor-agent instance (like CursorAgentNew).
-function M.send_prompt_file_to_new_agent(config)
-  local buf = vim.api.nvim_get_current_buf()
-  local source_buf = buf
-  local path = vim.api.nvim_buf_get_name(buf)
-  if path == nil or path == "" then
-    vim.notify("Current buffer has no file path (save the file first)", vim.log.levels.WARN)
-    return
-  end
-  if vim.bo[buf].modified then
-    vim.api.nvim_buf_call(buf, function()
-      vim.cmd("write")
-    end)
-  end
-
-  local text_to_send = current_buffer_text(buf)
-
-  picker.pick_command(config, function(cmd)
-    tabs.create_terminal(nil, config, cmd)
-    vim.defer_fn(function()
-      local active_id = tabs.get_active()
-      if active_id and terminal.is_running(active_id) then
-        local sent = terminal.send_text(text_to_send, active_id)
-        if sent then
-          vim.notify("Sent current file contents to new agent", vim.log.levels.INFO)
-          close_sent_prompt_buffer_if_needed(source_buf, config)
-        end
-      end
-    end, 200)
-  end)
 end
 
 return M

@@ -2,16 +2,19 @@
 --
 -- This is the entry point for the plugin, providing:
 -- - Plugin setup and configuration
--- - User-facing handlers for all operations (normal/visual mode, terminal operations)
+-- - User-facing handlers for all operations (normal/visual/terminal mode)
 -- - Keybinding and command registration
--- - Integration between config, terminal, tabs, and picker modules
+-- - Integration between config, terminal, tabs, history, and picker modules
 --
 -- Key handlers:
--- - normal_mode_handler(): Smart toggle (create first terminal or show last active)
--- - visual_mode_handler(): Send visual selection to active agent
--- - new_terminal_handler(): Create new agent terminal with prompt
--- - select_terminal_handler(): Open fuzzy picker to select agent
--- - rename_terminal_handler(): Rename active agent
+-- - normal_mode_handler():       Smart toggle in split mode
+-- - fullscreen_toggle_handler(): Smart toggle in fullscreen mode
+-- - visual_mode_handler():       Toggle (split) and send selection
+-- - visual_fullscreen_mode_handler(): Toggle (fullscreen) and send selection
+-- - new_terminal_handler():      Create new agent in split
+-- - new_fullscreen_handler():    Create new agent in fullscreen
+-- - select_terminal_handler():   Open fuzzy picker to select agent
+-- - rename_terminal_handler():   Rename active agent
 --
 local config_module = require("neovim-cursor.config")
 local terminal = require("neovim-cursor.terminal")
@@ -23,60 +26,185 @@ local M = {}
 local config = {}
 
 -- Plugin version (Semantic Versioning: MAJOR.MINOR.PATCH)
--- v1.0.0: Multi-terminal support with fuzzy picker, live preview, and full configurability
-M.version = "1.0.0"
+M.version = "1.1.0"
 
--- Normal mode handler: smart toggle (create first terminal or show last active)
-function M.normal_mode_handler()
+------------------------------------------------------------
+-- Internal helpers
+------------------------------------------------------------
+
+-- Toggle the last-active agent in the requested display mode, creating
+-- one through the picker if there is none yet.
+-- Used by both normal-mode and fullscreen toggle keybindings.
+local function smart_toggle(display_mode)
+  local toggle_fn = (display_mode == "fullscreen")
+    and terminal.toggle_fullscreen
+    or terminal.toggle
+
   if not tabs.has_terminals() then
     picker.pick_command(config, function(cmd)
-      tabs.create_terminal(nil, config, cmd)
+      tabs.create_terminal(nil, config, cmd, display_mode)
     end)
-  else
-    local last_id = tabs.get_last()
-    if last_id then
-      local term_meta = tabs.get_terminal(last_id)
-      terminal.toggle(config, last_id, term_meta and term_meta.command)
-    else
-      picker.pick_command(config, function(cmd)
-        tabs.create_terminal(nil, config, cmd)
-      end)
+    return
+  end
+
+  local last_id = tabs.get_last()
+  if not last_id then
+    picker.pick_command(config, function(cmd)
+      tabs.create_terminal(nil, config, cmd, display_mode)
+    end)
+    return
+  end
+
+  local term_meta = tabs.get_terminal(last_id)
+  toggle_fn(config, last_id, term_meta and term_meta.command)
+end
+
+-- Build the @file:start-end link for the most recent visual selection.
+local function visual_selection_link()
+  local buf = vim.api.nvim_get_current_buf()
+  local filepath = vim.api.nvim_buf_get_name(buf)
+  local start_line = vim.fn.getpos("'<")[2]
+  local end_line = vim.fn.getpos("'>")[2]
+  return "@" .. filepath .. ":" .. start_line .. "-" .. end_line
+end
+
+-- Send `text` to the currently active agent after a delay.
+-- The delay lets the picker / terminal startup settle before we feed input.
+local function send_after(delay, text)
+  vim.defer_fn(function()
+    local active_id = tabs.get_active()
+    if active_id and terminal.is_running(active_id) then
+      terminal.send_text(text, active_id)
     end
+  end, delay)
+end
+
+-- Toggle the agent and send a visual-mode selection link in one go.
+local function smart_toggle_with_selection(display_mode)
+  local link = visual_selection_link()
+  local toggle_fn = (display_mode == "fullscreen")
+    and terminal.toggle_fullscreen
+    or terminal.toggle
+
+  if not tabs.has_terminals() then
+    picker.pick_command(config, function(cmd)
+      tabs.create_terminal(nil, config, cmd, display_mode)
+      send_after(200, link)
+    end)
+    return
+  end
+
+  local last_id = tabs.get_last()
+  if not last_id then
+    picker.pick_command(config, function(cmd)
+      tabs.create_terminal(nil, config, cmd, display_mode)
+      send_after(200, link)
+    end)
+    return
+  end
+
+  local term_meta = tabs.get_terminal(last_id)
+  toggle_fn(config, last_id, term_meta and term_meta.command)
+  send_after(100, link)
+end
+
+-- Drop in front of any visual-mode keymap to leave visual mode and run a
+-- handler against the just-finished selection (using `'<` and `'>`).
+local function exit_visual_then(callback)
+  return function()
+    local esc = vim.api.nvim_replace_termcodes("<Esc>", true, false, true)
+    vim.api.nvim_feedkeys(esc, "x", false)
+    vim.schedule(callback)
   end
 end
 
--- Handler for creating a new terminal
+------------------------------------------------------------
+-- Public handlers
+------------------------------------------------------------
+
+function M.normal_mode_handler()
+  smart_toggle("split")
+end
+
+function M.fullscreen_toggle_handler()
+  smart_toggle("fullscreen")
+end
+
+function M.visual_mode_handler()
+  smart_toggle_with_selection("split")
+end
+
+function M.visual_fullscreen_mode_handler()
+  smart_toggle_with_selection("fullscreen")
+end
+
 function M.new_terminal_handler()
   picker.pick_command(config, function(cmd)
-    tabs.create_terminal(nil, config, cmd)
+    tabs.create_terminal(nil, config, cmd, "split")
   end)
 end
 
--- Handler for creating a new terminal from within terminal mode
--- Hides current terminal first, then creates a new one
+function M.new_fullscreen_handler()
+  picker.pick_command(config, function(cmd)
+    tabs.create_terminal(nil, config, cmd, "fullscreen")
+  end)
+end
+
+-- Hide the agent regardless of which mode it's currently displayed in.
+-- Mounted on terminal-mode keymaps so a single key always "puts the agent away".
+function M.hide_from_terminal_handler()
+  if terminal.is_fullscreen_active() then
+    terminal.hide_fullscreen()
+  else
+    terminal.hide()
+  end
+end
+
+-- From within a terminal: hide whatever mode it's in, then run the new-agent flow.
 function M.new_terminal_from_terminal_handler()
-  -- Hide the current terminal
-  terminal.hide()
+  if terminal.is_fullscreen_active() then
+    terminal.hide_fullscreen()
+  else
+    terminal.hide()
+  end
 
-  -- Schedule the new terminal creation to happen after hiding completes
-  vim.schedule(function()
-    M.new_terminal_handler()
-  end)
+  vim.schedule(M.new_terminal_handler)
 end
 
--- Handler for opening last prompt file from within terminal mode
--- Hides current terminal first, then opens/switches to the latest prompt buffer
+-- From within a terminal: hide whatever mode it's in, then open the latest prompt buffer.
 function M.open_last_prompt_from_terminal_handler()
-  -- Hide the current terminal
-  terminal.hide()
+  if terminal.is_fullscreen_active() then
+    terminal.hide_fullscreen()
+  else
+    terminal.hide()
+  end
 
-  -- Schedule prompt opening to happen after hiding completes
   vim.schedule(function()
     history.open_last_prompt_buffer(config)
   end)
 end
 
--- Handler for selecting a terminal from picker
+-- From within a terminal, swap between split and fullscreen presentation.
+function M.fullscreen_toggle_from_terminal_handler()
+  if terminal.is_fullscreen_active() then
+    terminal.hide_fullscreen()
+    return
+  end
+
+  local active_id = tabs.get_active()
+  if not active_id then
+    return
+  end
+
+  local term_meta = tabs.get_terminal(active_id)
+  -- Hide the split first; toggle_fullscreen will then take over the
+  -- window the user gets focused on after `nvim_win_hide`.
+  terminal.hide(active_id)
+  vim.schedule(function()
+    terminal.toggle_fullscreen(config, active_id, term_meta and term_meta.command)
+  end)
+end
+
 function M.select_terminal_handler()
   picker.pick_terminal(config, function(selected_id)
     if selected_id then
@@ -85,19 +213,17 @@ function M.select_terminal_handler()
   end)
 end
 
--- Handler for renaming the active terminal
 function M.rename_terminal_handler()
   local active_id = tabs.get_active()
-  
+
   if not active_id then
     vim.notify("No active terminal to rename. Create one with <leader>an", vim.log.levels.WARN)
     return
   end
-  
+
   local term = tabs.get_terminal(active_id)
   local current_name = term and term.name or ""
-  
-  -- Check if we're currently in a terminal buffer
+
   local current_buf = vim.api.nvim_get_current_buf()
   local is_terminal_buf = vim.bo[current_buf].buftype == "terminal"
 
@@ -108,42 +234,35 @@ function M.rename_terminal_handler()
     if input and input ~= "" then
       if tabs.rename_terminal(active_id, input) then
         vim.notify("Terminal renamed to: " .. input, vim.log.levels.INFO)
-        -- If we were in a terminal buffer, go back to insert mode
         if is_terminal_buf then
-          vim.schedule(function()
-            vim.cmd("startinsert")
-          end)
+          vim.schedule(function() vim.cmd("startinsert") end)
         end
       else
         vim.notify("Failed to rename terminal", vim.log.levels.ERROR)
       end
     elseif is_terminal_buf then
-      -- User cancelled, but if we were in terminal, go back to insert mode
-      vim.schedule(function()
-        vim.cmd("startinsert")
-      end)
+      vim.schedule(function() vim.cmd("startinsert") end)
     end
   end)
 end
 
--- Handler for listing all terminals
 function M.list_terminals_handler()
   local terminals = tabs.list_terminals()
-  
+
   if #terminals == 0 then
     vim.notify("No terminals available. Create one with <leader>an", vim.log.levels.INFO)
     return
   end
-  
+
   local active_id = tabs.get_active()
   local lines = {"Cursor Agent Terminals:", ""}
-  
+
   for i, term in ipairs(terminals) do
     local status = terminal.is_running(term.id) and "running" or "stopped"
     local active_marker = (term.id == active_id) and "? " or "  "
     local age_seconds = os.time() - term.created_at
     local age_str
-    
+
     if age_seconds < 60 then
       age_str = age_seconds .. "s"
     elseif age_seconds < 3600 then
@@ -151,68 +270,21 @@ function M.list_terminals_handler()
     else
       age_str = math.floor(age_seconds / 3600) .. "h"
     end
-    
-    table.insert(lines, string.format("%s%d. %s [%s] (created %s ago)", 
+
+    table.insert(lines, string.format("%s%d. %s [%s] (created %s ago)",
       active_marker, i, term.name, status, age_str))
   end
-  
+
   table.insert(lines, "")
   table.insert(lines, string.format("Total: %d terminal(s)", #terminals))
-  
+
   vim.notify(table.concat(lines, "\n"), vim.log.levels.INFO)
 end
 
--- Visual mode handler: toggle terminal and send selection
-function M.visual_mode_handler()
-  local buf = vim.api.nvim_get_current_buf()
-  local filepath = vim.api.nvim_buf_get_name(buf)
+------------------------------------------------------------
+-- Link copy helpers
+------------------------------------------------------------
 
-  local start_pos = vim.fn.getpos("'<")
-  local end_pos = vim.fn.getpos("'>")
-  local start_line = start_pos[2]
-  local end_line = end_pos[2]
-
-  if not tabs.has_terminals() then
-    picker.pick_command(config, function(cmd)
-      tabs.create_terminal(nil, config, cmd)
-      vim.defer_fn(function()
-        local active_id = tabs.get_active()
-        if active_id and terminal.is_running(active_id) then
-          local text_to_send = "@" .. filepath .. ":" .. start_line .. "-" .. end_line
-          terminal.send_text(text_to_send, active_id)
-        end
-      end, 200)
-    end)
-  else
-    local last_id = tabs.get_last()
-    if last_id then
-      local term_meta = tabs.get_terminal(last_id)
-      terminal.toggle(config, last_id, term_meta and term_meta.command)
-
-      vim.defer_fn(function()
-        local active_id = tabs.get_active()
-        if active_id and terminal.is_running(active_id) then
-          local text_to_send = "@" .. filepath .. ":" .. start_line .. "-" .. end_line
-          terminal.send_text(text_to_send, active_id)
-        end
-      end, 100)
-    else
-      picker.pick_command(config, function(cmd)
-        tabs.create_terminal(nil, config, cmd)
-        vim.defer_fn(function()
-          local active_id = tabs.get_active()
-          if active_id and terminal.is_running(active_id) then
-            local text_to_send = "@" .. filepath .. ":" .. start_line .. "-" .. end_line
-            terminal.send_text(text_to_send, active_id)
-          end
-        end, 200)
-      end)
-    end
-  end
-end
-
--- Copy Cursor-style @file:start-end link to unnamed register (nvim buffer).
--- Used from visual mode (range from '< and '>) or from command (range from opts or current line).
 local function copy_range_link_to_clipboard(filepath, start_line, end_line)
   if not filepath or filepath == "" then
     vim.notify("No file path (buffer not saved?)", vim.log.levels.WARN)
@@ -223,8 +295,6 @@ local function copy_range_link_to_clipboard(filepath, start_line, end_line)
   vim.notify("Copied to buffer: " .. link, vim.log.levels.INFO)
 end
 
--- Copy Cursor-style @file link to unnamed register (nvim buffer).
--- Used from normal mode when no explicit range is needed.
 local function copy_file_link_to_clipboard(filepath)
   if not filepath or filepath == "" then
     vim.notify("No file path (buffer not saved?)", vim.log.levels.WARN)
@@ -235,181 +305,147 @@ local function copy_file_link_to_clipboard(filepath)
   vim.notify("Copied to buffer: " .. link, vim.log.levels.INFO)
 end
 
--- Handler: copy @file link for current buffer to unnamed register.
 function M.copy_file_link_handler()
   local buf = vim.api.nvim_get_current_buf()
   local filepath = vim.api.nvim_buf_get_name(buf)
   copy_file_link_to_clipboard(filepath)
 end
 
--- Handler: copy link for last visual selection to unnamed register (call after exiting visual mode).
 function M.copy_link_handler()
   local buf = vim.api.nvim_get_current_buf()
   local filepath = vim.api.nvim_buf_get_name(buf)
-  local start_pos = vim.fn.getpos("'<")
-  local end_pos = vim.fn.getpos("'>")
-  local start_line = start_pos[2]
-  local end_line = end_pos[2]
+  local start_line = vim.fn.getpos("'<")[2]
+  local end_line = vim.fn.getpos("'>")[2]
   copy_range_link_to_clipboard(filepath, start_line, end_line)
 end
 
--- Setup function to initialize the plugin
+------------------------------------------------------------
+-- Setup
+------------------------------------------------------------
+
+-- Register a single normal-mode keymap with consistent options.
+local function set_n(lhs, rhs, desc)
+  if not lhs or lhs == "" then return end
+  vim.keymap.set("n", lhs, rhs, { desc = desc, silent = true })
+end
+
+local function warn_deprecated_prompt_send_new()
+  vim.notify(
+    "[neovim-cursor] CursorAgentPromptSendNew / keybindings.prompt_send_new is deprecated. " ..
+    "Create a new agent with CursorAgentNew, then use CursorAgentPromptSend.",
+    vim.log.levels.WARN
+  )
+end
+
 function M.setup(user_config)
-  -- Merge user config with defaults
   config = config_module.setup(user_config)
 
   local keybindings = config.keybindings
 
-  -- Set up keybindings for toggle (skip if binding is empty string)
+  -- Toggle (split)
   if keybindings.toggle and keybindings.toggle ~= "" then
-    vim.keymap.set("n", keybindings.toggle, M.normal_mode_handler, {
-      desc = "Toggle Cursor Agent terminal",
-      silent = true,
-    })
-
-    vim.keymap.set("v", keybindings.toggle, function()
-      -- Exit visual mode before processing
-      local esc = vim.api.nvim_replace_termcodes("<Esc>", true, false, true)
-      vim.api.nvim_feedkeys(esc, "x", false)
-      -- Call handler after exiting visual mode
-      vim.schedule(M.visual_mode_handler)
-    end, {
+    set_n(keybindings.toggle, M.normal_mode_handler, "Toggle Cursor Agent terminal")
+    vim.keymap.set("v", keybindings.toggle, exit_visual_then(M.visual_mode_handler), {
       desc = "Toggle Cursor Agent terminal and send selection",
       silent = true,
     })
   end
 
-  -- Keybinding for creating a new terminal
-  if keybindings.new and keybindings.new ~= "" then
-    vim.keymap.set("n", keybindings.new, M.new_terminal_handler, {
-      desc = "Create new Cursor Agent terminal",
+  -- Toggle (fullscreen)
+  if keybindings.toggle_fullscreen and keybindings.toggle_fullscreen ~= "" then
+    set_n(keybindings.toggle_fullscreen, M.fullscreen_toggle_handler, "Toggle Cursor Agent terminal fullscreen")
+    vim.keymap.set("v", keybindings.toggle_fullscreen, exit_visual_then(M.visual_fullscreen_mode_handler), {
+      desc = "Toggle Cursor Agent terminal fullscreen and send selection",
       silent = true,
     })
   end
 
-  -- Keybinding for selecting a terminal
-  if keybindings.select and keybindings.select ~= "" then
-    vim.keymap.set("n", keybindings.select, M.select_terminal_handler, {
-      desc = "Select Cursor Agent terminal",
-      silent = true,
-    })
-  end
+  set_n(keybindings.new, M.new_terminal_handler, "Create new Cursor Agent terminal")
+  set_n(keybindings.new_fullscreen, M.new_fullscreen_handler, "Create new Cursor Agent terminal in fullscreen")
+  set_n(keybindings.select, M.select_terminal_handler, "Select Cursor Agent terminal")
+  set_n(keybindings.rename, M.rename_terminal_handler, "Rename Cursor Agent terminal")
 
-  -- Keybinding for renaming a terminal
-  if keybindings.rename and keybindings.rename ~= "" then
-    vim.keymap.set("n", keybindings.rename, M.rename_terminal_handler, {
-      desc = "Rename Cursor Agent terminal",
-      silent = true,
-    })
-  end
-
-  -- Keybinding for creating new prompt file in history
   if keybindings.prompt_new and keybindings.prompt_new ~= "" then
-    vim.keymap.set("n", keybindings.prompt_new, function()
+    set_n(keybindings.prompt_new, function()
       history.create_prompt_file(config)
-    end, {
-      desc = "Create new prompt file in .nvim-cursor/history",
-      silent = true,
-    })
+    end, "Create new prompt file in .nvim-cursor/history")
   end
 
-  -- Keybinding for sending current file to agent
   if keybindings.prompt_send and keybindings.prompt_send ~= "" then
-    vim.keymap.set("n", keybindings.prompt_send, function()
+    set_n(keybindings.prompt_send, function()
       history.send_prompt_file_to_agent(config)
-    end, {
-      desc = "Send current file contents to Cursor Agent",
-      silent = true,
-    })
+    end, "Send current file contents to Cursor Agent")
   end
 
-  -- Keybinding for sending current file to a new agent
   if keybindings.prompt_send_new and keybindings.prompt_send_new ~= "" then
-    vim.keymap.set("n", keybindings.prompt_send_new, function()
+    set_n(keybindings.prompt_send_new, function()
+      warn_deprecated_prompt_send_new()
       history.send_prompt_file_to_new_agent(config)
-    end, {
-      desc = "Send current file contents to new Cursor Agent",
-      silent = true,
-    })
+    end, "Deprecated: send current file contents to new Cursor Agent")
   end
 
-  -- Keybinding for opening prompt history in Telescope
   if keybindings.prompt_history_telescope and keybindings.prompt_history_telescope ~= "" then
-    vim.keymap.set("n", keybindings.prompt_history_telescope, function()
+    set_n(keybindings.prompt_history_telescope, function()
       history.open_history_in_telescope(config)
-    end, {
-      desc = "Open prompt history directory in Telescope",
-      silent = true,
-    })
+    end, "Open prompt history directory in Telescope")
   end
 
-  -- Keybinding for opening or switching to last prompt buffer
   if keybindings.prompt_last and keybindings.prompt_last ~= "" then
-    vim.keymap.set("n", keybindings.prompt_last, function()
+    set_n(keybindings.prompt_last, function()
       history.open_last_prompt_buffer(config)
-    end, {
-      desc = "Open or switch to last prompt file from history",
-      silent = true,
-    })
+    end, "Open or switch to last prompt file from history")
   end
 
-  -- Keybinding for copying Cursor links to unnamed register (normal + visual modes)
   if keybindings.copy_link and keybindings.copy_link ~= "" then
-    vim.keymap.set("n", keybindings.copy_link, M.copy_file_link_handler, {
-      desc = "Copy Cursor @file link to clipboard",
-      silent = true,
-    })
-
-    vim.keymap.set("v", keybindings.copy_link, function()
-      local esc = vim.api.nvim_replace_termcodes("<Esc>", true, false, true)
-      vim.api.nvim_feedkeys(esc, "x", false)
-      vim.schedule(M.copy_link_handler)
-    end, {
+    set_n(keybindings.copy_link, M.copy_file_link_handler, "Copy Cursor @file link to clipboard")
+    vim.keymap.set("v", keybindings.copy_link, exit_visual_then(M.copy_link_handler), {
       desc = "Copy Cursor @file:start-end link to clipboard",
       silent = true,
     })
   end
 
-  -- Create user command for toggle
+  ----------------------------------------------------------
+  -- User commands
+  ----------------------------------------------------------
+
   vim.api.nvim_create_user_command("CursorAgent", function()
     M.normal_mode_handler()
-  end, {
-    desc = "Toggle Cursor Agent terminal",
-  })
+  end, { desc = "Toggle Cursor Agent terminal" })
 
-  -- Create command to create new terminal
+  vim.api.nvim_create_user_command("CursorAgentFullscreen", function()
+    M.fullscreen_toggle_handler()
+  end, { desc = "Toggle Cursor Agent terminal fullscreen" })
+
   vim.api.nvim_create_user_command("CursorAgentNew", function(opts)
     local name = opts.args and opts.args ~= "" and opts.args or nil
     picker.pick_command(config, function(cmd)
-      tabs.create_terminal(name, config, cmd)
+      tabs.create_terminal(name, config, cmd, "split")
     end)
   end, {
     desc = "Create new Cursor Agent terminal",
     nargs = "?",
   })
 
-  -- Create command to select terminal
+  vim.api.nvim_create_user_command("CursorAgentNewFullscreen", function()
+    M.new_fullscreen_handler()
+  end, { desc = "Create new Cursor Agent terminal in fullscreen" })
+
   vim.api.nvim_create_user_command("CursorAgentSelect", function()
     M.select_terminal_handler()
-  end, {
-    desc = "Select Cursor Agent terminal",
-  })
+  end, { desc = "Select Cursor Agent terminal" })
 
-  -- Create command to rename terminal
   vim.api.nvim_create_user_command("CursorAgentRename", function(opts)
     local active_id = tabs.get_active()
     if not active_id then
       vim.notify("No active terminal to rename", vim.log.levels.WARN)
       return
     end
-    
+
     if opts.args and opts.args ~= "" then
-      -- Name provided as argument
       if tabs.rename_terminal(active_id, opts.args) then
         vim.notify("Terminal renamed to: " .. opts.args, vim.log.levels.INFO)
       end
     else
-      -- No argument, use the interactive handler
       M.rename_terminal_handler()
     end
   end, {
@@ -417,49 +453,31 @@ function M.setup(user_config)
     nargs = "?",
   })
 
-  -- Create command to list terminals
   vim.api.nvim_create_user_command("CursorAgentList", function()
     M.list_terminals_handler()
-  end, {
-    desc = "List all Cursor Agent terminals",
-  })
+  end, { desc = "List all Cursor Agent terminals" })
 
-  -- Create command to create new prompt file in history
   vim.api.nvim_create_user_command("CursorAgentPromptNew", function()
     history.create_prompt_file(config)
-  end, {
-    desc = "Create new prompt file in .nvim-cursor/history (timestamp in filename)",
-  })
+  end, { desc = "Create new prompt file in .nvim-cursor/history (timestamp in filename)" })
 
-  -- Create command to send current file to agent
   vim.api.nvim_create_user_command("CursorAgentPromptSend", function()
     history.send_prompt_file_to_agent(config)
-  end, {
-    desc = "Send current file contents to Cursor Agent",
-  })
+  end, { desc = "Send current file contents to Cursor Agent" })
 
-  -- Create command to open prompt history in Telescope
+  vim.api.nvim_create_user_command("CursorAgentPromptSendNew", function()
+    warn_deprecated_prompt_send_new()
+    history.send_prompt_file_to_new_agent(config)
+  end, { desc = "Deprecated: create new Cursor Agent and send current file contents" })
+
   vim.api.nvim_create_user_command("CursorAgentHistoryTelescope", function()
     history.open_history_in_telescope(config)
-  end, {
-    desc = "Open prompt history directory in Telescope",
-  })
+  end, { desc = "Open prompt history directory in Telescope" })
 
-  -- Create command to open or switch to last prompt buffer
   vim.api.nvim_create_user_command("CursorAgentPromptLast", function()
     history.open_last_prompt_buffer(config)
-  end, {
-    desc = "Open or switch to last prompt file from history",
-  })
+  end, { desc = "Open or switch to last prompt file from history" })
 
-  -- Create command to send current file to a new agent
-  vim.api.nvim_create_user_command("CursorAgentPromptSendNew", function()
-    history.send_prompt_file_to_new_agent(config)
-  end, {
-    desc = "Create new Cursor Agent and send current file contents",
-  })
-
-  -- Create command to copy @file:start-end link to unnamed register (range or current line)
   vim.api.nvim_create_user_command("CursorAgentCopyLink", function(opts)
     local buf = vim.api.nvim_get_current_buf()
     local filepath = vim.api.nvim_buf_get_name(buf)
@@ -471,7 +489,6 @@ function M.setup(user_config)
     range = true,
   })
 
-  -- Create command to send text manually
   vim.api.nvim_create_user_command("CursorAgentSend", function(opts)
     local active_id = tabs.get_active()
     if active_id and terminal.is_running(active_id) then
@@ -484,12 +501,9 @@ function M.setup(user_config)
     nargs = "+",
   })
 
-  -- Create command to display version
   vim.api.nvim_create_user_command("CursorAgentVersion", function()
     vim.notify("neovim-cursor v" .. M.version, vim.log.levels.INFO)
-  end, {
-    desc = "Display neovim-cursor plugin version",
-  })
+  end, { desc = "Display neovim-cursor plugin version" })
 end
 
 -- Expose modules for advanced usage
@@ -499,4 +513,3 @@ M.picker = picker
 M.history = history
 
 return M
-

@@ -11,6 +11,7 @@ This was created using Cursor in ~20 minutes; it doesn't have to be perfect, jus
 ## Features
 
 - 🚀 Toggle a vertical split terminal running the Cursor agent CLI with `<A-->`
+- 🖥️ **Fullscreen mode** — toggle agent in the current window with `<A-=>` (ideal for small screens)
 - 🎛️ **Manage multiple AI agent sessions simultaneously**
 - 🔍 **Fuzzy finder with live preview** (Telescope integration)
 - ✏️ **Rename and organize** agent terminals for different tasks
@@ -19,7 +20,6 @@ This was created using Cursor in ~20 minutes; it doesn't have to be perfect, jus
 - 📎 Copy Cursor links quickly: `@file` (normal mode) or `@file:start-end` (visual mode)
 - 📂 **Prompt history in Telescope** – browse `.nvim-cursor/history/` with Telescope
 - 📄 **Last prompt buffer** – open or switch to the most recent prompt file
-- 🆕 **Send to new agent** – send current file to a fresh agent (like new + prompt_send)
 - 💾 Persistent terminal sessions (hide/show without restarting)
 - ⚙️ Fully configurable (keybindings, split position, size, etc.)
 - 🎯 Written in pure Lua
@@ -74,9 +74,13 @@ EOF
 1. **Open/Toggle Agent**: Press `<A-->` in normal mode
    - First time: Creates your first agent terminal
    - After that: Toggles (show/hide) the last active agent
-2. **Create New Agent**: Press `<leader>an` to create additional agent terminals
-3. **Switch Agents**: Press `<F6>` to open a fuzzy picker with live preview
-4. **Rename Agent**: Press `<leader>ar` to rename the current agent terminal
+2. **Fullscreen Toggle**: Press `<A-=>` in normal mode
+   - Shows agent in the current window (no split — ideal for small screens)
+   - Press again to switch back to your file
+3. **Create New Agent**: Press `<leader>an` to create additional agent terminals
+4. **Create New Fullscreen Agent**: Press `<leader>aE` to create a new agent in fullscreen mode
+5. **Switch Agents**: Press `<F6>` to open a fuzzy picker with live preview
+6. **Rename Agent**: Press `<leader>ar` to rename the current agent terminal
 
 ### Multi-Terminal Management
 
@@ -86,13 +90,14 @@ Work with multiple AI agents simultaneously for different tasks:
 
 | Keybinding | Action |
 |------------|--------|
-| `<A-->` | Smart toggle - create first agent or show last active |
+| `<A-->` | Smart toggle - create first agent or show last active (split) |
+| `<A-=>` | Fullscreen toggle - show agent fullscreen or switch back to file |
 | `<leader>an` | Create new agent terminal with custom prompt |
+| `<leader>aE` | Create new agent terminal in fullscreen |
 | `<F6>` | Select agent from fuzzy picker (with live preview) |
 | `<leader>ar` | Rename current agent terminal |
 | `<leader>ah` | Create new prompt file in `.nvim-cursor/history/` (timestamp in filename) |
 | `<leader>ae` | Send current file contents to agent |
-| `<leader>aE` | Send current file contents to a **new** agent (create new instance + send task) |
 | `<leader>aH` | Open prompt history directory in Telescope (requires telescope.nvim) |
 | `<leader>al` | Open or switch to last prompt file from history |
 | `<leader>ac` | Copy `@file` link to clipboard (paste into Cursor prompt) |
@@ -110,6 +115,7 @@ When you're inside an agent terminal, you can manage agents without leaving:
 | Keybinding | Action |
 |------------|--------|
 | `<A-->` | Exit terminal mode / hide agent window |
+| `<A-=>` | Toggle fullscreen mode / exit terminal |
 | `<F7>` | Create new agent terminal |
 | `<F6>` | Select agent from fuzzy picker |
 | `<F2>` | Rename current agent terminal |
@@ -135,9 +141,9 @@ When you're inside an agent terminal, you can manage agents without leaving:
 **Send code selections to your active agent:**
 
 1. Select text in visual mode (v, V, or Ctrl-v)
-2. Press `<A-->`
+2. Press `<A-->` to send via split, or `<A-=>` to send via fullscreen
 3. The plugin will:
-   - Toggle the agent terminal (show it)
+   - Toggle the agent terminal (show it in split or fullscreen)
    - Send the file path with line range (e.g., `@file.lua:10-20`)
 
 Example:
@@ -175,20 +181,19 @@ Create a markdown file for a cursor-agent task and send it in one go:
 **Additional prompt history actions:**
 
 - **Browse history in Telescope**: `:CursorAgentHistoryTelescope` or `<leader>aH`  
-  Opens the prompt history directory in Telescope’s file finder (requires [telescope.nvim](https://github.com/nvim-telescope/telescope.nvim)).
+  Opens the prompt history directory in Telescope's file finder (requires [telescope.nvim](https://github.com/nvim-telescope/telescope.nvim)).
 - **Open last prompt**: `:CursorAgentPromptLast` or `<leader>al`  
   Opens or switches to the buffer of the most recent prompt file (by timestamp in filename).
-- **Send to new agent**: `:CursorAgentPromptSendNew` or `<leader>aE`  
-  Same as prompt_send but creates a new agent terminal first (like `CursorAgentNew`), then sends the current buffer contents.  
-  The same prompt-buffer auto-close behavior applies after successful send.
 
 ### Commands
 
 The plugin provides comprehensive commands for all operations:
 
 #### Terminal Management
-- `:CursorAgent` - Toggle agent terminal (smart toggle)
+- `:CursorAgent` - Toggle agent terminal (split mode)
+- `:CursorAgentFullscreen` - Toggle agent terminal (fullscreen mode)
 - `:CursorAgentNew [prompt]` - Create new agent terminal with optional initial prompt
+- `:CursorAgentNewFullscreen` - Create new agent terminal in fullscreen
 - `:CursorAgentSelect` - Open agent picker
 - `:CursorAgentRename [name]` - Rename active agent (interactive if no argument)
 - `:CursorAgentList` - List all agent terminals with status
@@ -196,7 +201,7 @@ The plugin provides comprehensive commands for all operations:
 #### Prompt history
 - `:CursorAgentPromptNew` - Create new prompt file in `.nvim-cursor/history/` (timestamp in filename)
 - `:CursorAgentPromptSend` - Send current file contents to the active agent terminal
-- `:CursorAgentPromptSendNew` - Create new agent and send current file contents (like new + prompt_send)
+- `:CursorAgentPromptSendNew` - Deprecated compatibility shim: create new agent and send current file contents
 - `:CursorAgentHistoryTelescope` - Open prompt history directory in Telescope
 - `:CursorAgentPromptLast` - Open or switch to last prompt file from history
 
@@ -215,13 +220,14 @@ The plugin provides comprehensive commands for all operations:
 require("neovim-cursor").setup({
   -- Multi-terminal keybindings (all configurable)
   keybindings = {
-    toggle = "<A-->",                -- Toggle agent window (show last active)
+    toggle = "<A-->",                -- Toggle agent window in split (show last active)
+    toggle_fullscreen = "<A-=>",     -- Toggle agent window fullscreen
     new = "<leader>an",              -- Create new agent terminal
+    new_fullscreen = "<leader>aE",   -- Create new agent terminal in fullscreen
     select = "<F6>",                 -- Select agent terminal (fuzzy picker)
     rename = "<leader>ar",           -- Rename current agent terminal
     prompt_new = "<leader>ah",       -- Create new prompt file in .nvim-cursor/history
     prompt_send = "<leader>ae",      -- Send current file contents to agent
-    prompt_send_new = "<leader>aE",  -- Send current file to a new agent
     prompt_history_telescope = "<leader>aH",  -- Open prompt history in Telescope
     prompt_last = "<leader>al",      -- Open or switch to last prompt buffer
     copy_link = "<leader>ac",        -- Copy link: normal mode => @file, visual mode => @file:start-end
@@ -264,6 +270,7 @@ require("neovim-cursor").setup({
   -- Terminal mode keybindings (when inside terminal buffer)
   terminal_keybindings = {
     hide = "<A-->",      -- Hide terminal window (terminal + normal mode in terminal)
+    toggle_fullscreen = "<A-=>", -- Toggle fullscreen mode
     new = "<F7>",        -- Create new agent terminal
     rename = "<F2>",     -- Rename current agent terminal
     select = "<F6>",     -- Select agent terminal
