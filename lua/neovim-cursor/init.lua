@@ -377,6 +377,12 @@ function M.setup(user_config)
     end, "Send current file contents to Cursor Agent")
   end
 
+  if keybindings.prompt_send_fullscreen and keybindings.prompt_send_fullscreen ~= "" then
+    set_n(keybindings.prompt_send_fullscreen, function()
+      history.send_prompt_file_to_agent_fullscreen(config)
+    end, "Send current file contents to Cursor Agent (fullscreen)")
+  end
+
   if keybindings.prompt_send_new and keybindings.prompt_send_new ~= "" then
     set_n(keybindings.prompt_send_new, function()
       warn_deprecated_prompt_send_new()
@@ -464,6 +470,10 @@ function M.setup(user_config)
   vim.api.nvim_create_user_command("CursorAgentPromptSend", function()
     history.send_prompt_file_to_agent(config)
   end, { desc = "Send current file contents to Cursor Agent" })
+
+  vim.api.nvim_create_user_command("CursorAgentPromptSendFullscreen", function()
+    history.send_prompt_file_to_agent_fullscreen(config)
+  end, { desc = "Send current file contents to Cursor Agent (force fullscreen)" })
 
   vim.api.nvim_create_user_command("CursorAgentPromptSendNew", function()
     warn_deprecated_prompt_send_new()

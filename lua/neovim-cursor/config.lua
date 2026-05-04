@@ -10,11 +10,12 @@ M.defaults = {
     toggle = "<A-->",                -- Toggle agent window in split (show last active)
     toggle_fullscreen = "<A-=>",     -- Toggle agent window fullscreen (show last active)
     new = "<leader>an",              -- Create new agent terminal
-    new_fullscreen = "<leader>aE",   -- Create new agent terminal in fullscreen
+    new_fullscreen = "<leader>aN",   -- Create new agent terminal in fullscreen
     select = "<F6>",                 -- Select agent terminal (fuzzy picker)
     rename = "<leader>ar",           -- Rename current agent terminal
     prompt_new = "<leader>ah",       -- Create new prompt file in .nvim-cursor/history
     prompt_send = "<leader>ae",      -- Send current file contents to agent
+    prompt_send_fullscreen = "<leader>aE",  -- Send current file contents to agent (force fullscreen)
     prompt_history_telescope = "<leader>aH",  -- Open prompt history dir in Telescope
     prompt_last = "<leader>al",      -- Open or switch to last prompt buffer
     copy_link = "<leader>ac",        -- Copy link (normal: @file, visual: @file:start-end) to unnamed register
@@ -79,8 +80,8 @@ local function check_deprecated_options(user_config)
   if user_config.keybindings.prompt_send_new ~= nil then
     warn_once("prompt_send_new",
       "[neovim-cursor] `keybindings.prompt_send_new` is deprecated but still supported. " ..
-      "The default <leader>aE slot is now used by `keybindings.new_fullscreen`; " ..
-      "create a new agent first, then use `keybindings.prompt_send`."
+      "The default <leader>aE slot is now used by `keybindings.prompt_send_fullscreen`; " ..
+      "create a new agent first, then use `keybindings.prompt_send` (or `keybindings.prompt_send_fullscreen`)."
     )
   end
 end

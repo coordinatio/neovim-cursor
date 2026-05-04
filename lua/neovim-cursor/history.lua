@@ -144,6 +144,15 @@ local function close_sent_prompt_buffer_if_needed(buf, config)
   end
 end
 
+local function prepare_prompt_buffer_for_fullscreen(buf, config)
+  if not is_plugin_prompt_file_buffer(buf, config) then
+    return
+  end
+
+  local replacement = util.find_or_create_restore_buffer(buf)
+  replace_prompt_in_open_windows(buf, replacement)
+end
+
 -- Expose history dir path for other modules
 function M.history_dir_path(config)
   return history_dir_path(config)
@@ -189,9 +198,14 @@ local function send_to_active_agent(text, source_buf, config, success_message)
 end
 
 -- Create a fresh terminal (via picker) and send `text` to it once it boots.
-local function pick_create_and_send(config, text, source_buf, success_message)
+-- @param display_mode string|nil "split" (default) or "fullscreen"
+local function pick_create_and_send(config, text, source_buf, success_message, display_mode)
   picker.pick_command(config, function(cmd)
-    tabs.create_terminal(nil, config, cmd)
+    if display_mode == "fullscreen" then
+      prepare_prompt_buffer_for_fullscreen(source_buf, config)
+    end
+
+    tabs.create_terminal(nil, config, cmd, display_mode)
     vim.defer_fn(function()
       send_to_active_agent(text, source_buf, config, success_message)
     end, 200)
@@ -245,6 +259,51 @@ function M.send_prompt_file_to_agent(config)
   elseif t_state.win and vim.api.nvim_win_is_valid(t_state.win) then
     vim.api.nvim_set_current_win(t_state.win)
     vim.cmd("startinsert")
+  end
+
+  vim.defer_fn(function()
+    send_to_active_agent(text_to_send, source_buf, config)
+  end, 100)
+end
+
+-- Send current buffer's file contents to cursor-agent, forcing fullscreen display.
+-- Like send_prompt_file_to_agent, but always shows the agent in fullscreen
+-- (promoting from split if needed) before sending.
+-- Saves the current buffer if modified so the file exists on disk for the agent.
+-- @param config Plugin config (for terminal/tabs)
+function M.send_prompt_file_to_agent_fullscreen(config)
+  local source_buf, text_to_send = current_file_text_or_notify()
+  if not source_buf then
+    return
+  end
+
+  if not tabs.has_terminals() then
+    pick_create_and_send(config, text_to_send, source_buf, nil, "fullscreen")
+    return
+  end
+
+  local last_id = tabs.get_last()
+  if not last_id then
+    pick_create_and_send(config, text_to_send, source_buf, nil, "fullscreen")
+    return
+  end
+
+  local term_meta = tabs.get_terminal(last_id)
+  local stored_cmd = term_meta and term_meta.command
+
+  if terminal.is_fullscreen_active(last_id) then
+    -- Already fullscreen; just refocus the terminal window if possible.
+    local t_state = terminal.get_state(last_id)
+    if t_state.win and vim.api.nvim_win_is_valid(t_state.win) then
+      vim.api.nvim_set_current_win(t_state.win)
+      vim.cmd("startinsert")
+    end
+  else
+    prepare_prompt_buffer_for_fullscreen(source_buf, config)
+
+    -- Either hidden, or visible in a split. toggle_fullscreen handles both:
+    -- it hides the split first and then takes over the focused window.
+    terminal.toggle_fullscreen(config, last_id, stored_cmd)
   end
 
   vim.defer_fn(function()

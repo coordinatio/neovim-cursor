@@ -78,9 +78,10 @@ EOF
    - Shows agent in the current window (no split — ideal for small screens)
    - Press again to switch back to your file
 3. **Create New Agent**: Press `<leader>an` to create additional agent terminals
-4. **Create New Fullscreen Agent**: Press `<leader>aE` to create a new agent in fullscreen mode
-5. **Switch Agents**: Press `<F6>` to open a fuzzy picker with live preview
-6. **Rename Agent**: Press `<leader>ar` to rename the current agent terminal
+4. **Create New Fullscreen Agent**: Press `<leader>aN` to create a new agent in fullscreen mode
+5. **Send File to Fullscreen Agent**: Press `<leader>aE` to send the current file contents to the agent and force the agent window to fullscreen
+6. **Switch Agents**: Press `<F6>` to open a fuzzy picker with live preview
+7. **Rename Agent**: Press `<leader>ar` to rename the current agent terminal
 
 ### Multi-Terminal Management
 
@@ -93,11 +94,12 @@ Work with multiple AI agents simultaneously for different tasks:
 | `<A-->` | Smart toggle - create first agent or show last active (split) |
 | `<A-=>` | Fullscreen toggle - show agent fullscreen or switch back to file |
 | `<leader>an` | Create new agent terminal with custom prompt |
-| `<leader>aE` | Create new agent terminal in fullscreen |
+| `<leader>aN` | Create new agent terminal in fullscreen |
 | `<F6>` | Select agent from fuzzy picker (with live preview) |
 | `<leader>ar` | Rename current agent terminal |
 | `<leader>ah` | Create new prompt file in `.nvim-cursor/history/` (timestamp in filename) |
 | `<leader>ae` | Send current file contents to agent |
+| `<leader>aE` | Send current file contents to agent (force fullscreen) |
 | `<leader>aH` | Open prompt history directory in Telescope (requires telescope.nvim) |
 | `<leader>al` | Open or switch to last prompt file from history |
 | `<leader>ac` | Copy `@file` link to clipboard (paste into Cursor prompt) |
@@ -201,6 +203,7 @@ The plugin provides comprehensive commands for all operations:
 #### Prompt history
 - `:CursorAgentPromptNew` - Create new prompt file in `.nvim-cursor/history/` (timestamp in filename)
 - `:CursorAgentPromptSend` - Send current file contents to the active agent terminal
+- `:CursorAgentPromptSendFullscreen` - Send current file contents to the active agent terminal and force the agent window to fullscreen
 - `:CursorAgentPromptSendNew` - Deprecated compatibility shim: create new agent and send current file contents
 - `:CursorAgentHistoryTelescope` - Open prompt history directory in Telescope
 - `:CursorAgentPromptLast` - Open or switch to last prompt file from history
@@ -223,11 +226,12 @@ require("neovim-cursor").setup({
     toggle = "<A-->",                -- Toggle agent window in split (show last active)
     toggle_fullscreen = "<A-=>",     -- Toggle agent window fullscreen
     new = "<leader>an",              -- Create new agent terminal
-    new_fullscreen = "<leader>aE",   -- Create new agent terminal in fullscreen
+    new_fullscreen = "<leader>aN",   -- Create new agent terminal in fullscreen
     select = "<F6>",                 -- Select agent terminal (fuzzy picker)
     rename = "<leader>ar",           -- Rename current agent terminal
     prompt_new = "<leader>ah",       -- Create new prompt file in .nvim-cursor/history
     prompt_send = "<leader>ae",      -- Send current file contents to agent
+    prompt_send_fullscreen = "<leader>aE",  -- Send current file contents to agent (force fullscreen)
     prompt_history_telescope = "<leader>aH",  -- Open prompt history in Telescope
     prompt_last = "<leader>al",      -- Open or switch to last prompt buffer
     copy_link = "<leader>ac",        -- Copy link: normal mode => @file, visual mode => @file:start-end
