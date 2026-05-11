@@ -25,6 +25,96 @@ local active_id = nil  -- Currently active terminal ID
 local default_id = "default"  -- Default terminal ID for backward compatibility
 local cleanup_callbacks = {}  -- Callbacks called when a terminal exits (used by tabs.lua)
 
+local passthrough_active = false
+local passthrough_ns = vim.api.nvim_create_namespace("neovim-cursor-passthrough")
+
+local special_key_defs = {
+  {"<Up>",       "\x1b[A"},
+  {"<Down>",     "\x1b[B"},
+  {"<Right>",    "\x1b[C"},
+  {"<Left>",     "\x1b[D"},
+  {"<PageUp>",   "\x1b[5~"},
+  {"<PageDown>", "\x1b[6~"},
+  {"<Home>",     "\x1b[H"},
+  {"<End>",      "\x1b[F"},
+  {"<Insert>",   "\x1b[2~"},
+  {"<Delete>",   "\x1b[3~"},
+  {"<F1>",       "\x1bOP"},
+  {"<F2>",       "\x1bOQ"},
+  {"<F3>",       "\x1bOR"},
+  {"<F4>",       "\x1bOS"},
+  {"<F5>",       "\x1b[15~"},
+  {"<F6>",       "\x1b[17~"},
+  {"<F7>",       "\x1b[18~"},
+  {"<F8>",       "\x1b[19~"},
+  {"<F9>",       "\x1b[20~"},
+  {"<F10>",      "\x1b[21~"},
+  {"<F11>",      "\x1b[23~"},
+  {"<F12>",      "\x1b[24~"},
+  {"<Tab>",      "\x09"},
+  {"<BS>",       "\x7f"},
+  {"<CR>",       "\x0d"},
+  {"<S-Up>",     "\x1b[1;2A"},
+  {"<S-Down>",   "\x1b[1;2B"},
+  {"<S-Right>",  "\x1b[1;2C"},
+  {"<S-Left>",   "\x1b[1;2D"},
+  {"<S-PageUp>",   "\x1b[5;2~"},
+  {"<S-PageDown>", "\x1b[6;2~"},
+  {"<S-Home>",     "\x1b[1;2H"},
+  {"<S-End>",      "\x1b[1;2F"},
+  {"<C-Up>",     "\x1b[1;5A"},
+  {"<C-Down>",   "\x1b[1;5B"},
+  {"<C-Right>",  "\x1b[1;5C"},
+  {"<C-Left>",   "\x1b[1;5D"},
+  {"<S-Tab>",    "\x1b[Z"},
+  {"<Space>",    " "},
+}
+
+local special_key_map = nil
+
+local function get_special_key_map()
+  if special_key_map then return special_key_map end
+  special_key_map = {}
+  for _, pair in ipairs(special_key_defs) do
+    local nvim_key = vim.api.nvim_replace_termcodes(pair[1], true, false, true)
+    special_key_map[nvim_key] = pair[2]
+  end
+  return special_key_map
+end
+
+local function get_job_id_for_current_buf()
+  local buf = vim.api.nvim_get_current_buf()
+  if vim.bo[buf].buftype ~= "terminal" then return nil end
+  local job_id = vim.b[buf].terminal_job_id
+  if job_id then return job_id end
+  for _, term in pairs(terminals) do
+    if term.buf == buf and term.job_id then
+      return term.job_id
+    end
+  end
+  return nil
+end
+
+local function neovim_key_to_termseq(key)
+  if #key == 1 then
+    local b = string.byte(key)
+    if b == 27 then return nil end
+    return key
+  end
+  local kmap = get_special_key_map()
+  if kmap[key] then return kmap[key] end
+  return key
+end
+
+local function do_send_key(key)
+  local seq = neovim_key_to_termseq(key)
+  if not seq then return false end
+  local job_id = get_job_id_for_current_buf()
+  if not job_id then return false end
+  vim.api.nvim_chan_send(job_id, seq)
+  return true
+end
+
 -- Fullscreen mode singleton state.
 -- At most one terminal can be displayed fullscreen at a time because
 -- "fullscreen" simply means "took over a window that was showing something
@@ -72,6 +162,50 @@ function M.is_running(id)
   end
 
   return false
+end
+
+function M.send_passthrough_key()
+  if not get_job_id_for_current_buf() then
+    vim.notify("Not in a terminal buffer", vim.log.levels.WARN)
+    return
+  end
+  local ok, key = pcall(vim.fn.getcharstr)
+  if not ok or key == "" then return end
+  do_send_key(key)
+end
+
+function M.is_passthrough_active()
+  return passthrough_active
+end
+
+function M.exit_passthrough_mode()
+  if not passthrough_active then return end
+  passthrough_active = false
+  vim.on_key(nil, passthrough_ns)
+  vim.api.nvim_echo({{"", "Normal"}}, false, {})
+end
+
+function M.enter_passthrough_mode()
+  if passthrough_active then return end
+  if not get_job_id_for_current_buf() then
+    vim.notify("Not in a terminal buffer", vim.log.levels.WARN)
+    return
+  end
+  passthrough_active = true
+  vim.api.nvim_echo({{"-- PASS THROUGH (Esc to exit) --", "WarningMsg"}}, false, {})
+  local esc_internal = vim.api.nvim_replace_termcodes("<Esc>", true, false, true)
+  vim.on_key(function(key)
+    if not passthrough_active then return end
+    if key == esc_internal then
+      M.exit_passthrough_mode()
+      return ""
+    end
+    if not do_send_key(key) then
+      M.exit_passthrough_mode()
+      return
+    end
+    return ""
+  end, passthrough_ns)
 end
 
 -- Verify the fullscreen window still actually shows the tracked terminal.
@@ -357,6 +491,28 @@ local function create_terminal_instance(id, config, command, display_mode)
       noremap = true,
       silent = true,
       desc = "Toggle fullscreen agent mode"
+    })
+  end
+
+  if term_keys.passthrough and term_keys.passthrough ~= "" then
+    local passthrough_rhs = '<Cmd>lua require("neovim-cursor.terminal").send_passthrough_key()<CR>'
+    vim.api.nvim_buf_set_keymap(term.buf, 'n', term_keys.passthrough, passthrough_rhs, {
+      noremap = true,
+      silent = true,
+      desc = "Send next key to TUI application"
+    })
+    local base = term_keys.passthrough:match("^<leader>(.+)$")
+    local double_key
+    if base then
+      double_key = "<leader>" .. base .. base
+    else
+      double_key = term_keys.passthrough .. term_keys.passthrough
+    end
+    local mode_rhs = '<Cmd>lua require("neovim-cursor.terminal").enter_passthrough_mode()<CR>'
+    vim.api.nvim_buf_set_keymap(term.buf, 'n', double_key, mode_rhs, {
+      noremap = true,
+      silent = true,
+      desc = "Enter passthrough mode (all keys to TUI, Esc to exit)"
     })
   end
 

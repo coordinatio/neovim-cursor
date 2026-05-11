@@ -57,6 +57,7 @@ M.defaults = {
     rename = "<F2>",     -- Rename current agent window
     select = "<F6>",     -- Select agent terminal
     prompt_last = "<F12>", -- Open or switch to last prompt buffer
+    passthrough = "<leader>i", -- Send next key (or enter passthrough mode) to TUI app
   },
 }
 

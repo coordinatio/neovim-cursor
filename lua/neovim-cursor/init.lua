@@ -246,6 +246,18 @@ function M.rename_terminal_handler()
   end)
 end
 
+function M.passthrough_key_handler()
+  terminal.send_passthrough_key()
+end
+
+function M.passthrough_mode_handler()
+  if terminal.is_passthrough_active() then
+    terminal.exit_passthrough_mode()
+  else
+    terminal.enter_passthrough_mode()
+  end
+end
+
 function M.list_terminals_handler()
   local terminals = tabs.list_terminals()
 

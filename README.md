@@ -22,12 +22,13 @@ This was created using Cursor in ~20 minutes; it doesn't have to be perfect, jus
 - 📄 **Last prompt buffer** – open or switch to the most recent prompt file
 - 💾 Persistent terminal sessions (hide/show without restarting)
 - ⚙️ Fully configurable (keybindings, split position, size, etc.)
+- 🔑 **Passthrough mode** — send keys directly to TUI apps running inside the agent terminal (`<leader>i` for single key, double-press for continuous mode)
 - 🎯 Written in pure Lua
 
 
 ## Requirements
 
-- Neovim >= 0.8.0
+- Neovim >= 0.11.0
 - Cursor agent CLI available in your `PATH`:
   - Preferably `cursor-agent` (common on Linux, and avoids launching the GUI)
   - Or `cursor` with `cursor agent` support
@@ -103,6 +104,8 @@ Work with multiple AI agents simultaneously for different tasks:
 | `<leader>aH` | Open prompt history directory in Telescope (requires telescope.nvim) |
 | `<leader>al` | Open or switch to last prompt file from history |
 | `<leader>ac` | Copy `@file` link to clipboard (paste into Cursor prompt) |
+| `<leader>i` | Send next key directly to TUI app in agent terminal |
+| `<leader>ii` | Toggle continuous passthrough mode (all keys go to TUI, Esc to exit) |
 
 #### From Visual Mode
 
@@ -122,8 +125,26 @@ When you're inside an agent terminal, you can manage agents without leaving:
 | `<F6>` | Select agent from fuzzy picker |
 | `<F2>` | Rename current agent terminal |
 | `<F12>` | Open or switch to last prompt file from history |
+| `<leader>i` | Send next key directly to TUI app in agent terminal |
+| `<leader>ii` | Toggle continuous passthrough mode (all keys go to TUI, Esc to exit) |
 
 > **Note:** All terminal mode keybindings are configurable via `terminal_keybindings` option (see Configuration section).
+
+### Passthrough Mode
+
+When a TUI application (e.g. a text editor, file manager, or pager) is running inside the agent terminal, Neovim's normal-mode keybindings intercept keys before they reach the terminal. Passthrough mode lets you send keys directly to the TUI app.
+
+**Single-key passthrough** (`<leader>i` by default):
+1. Navigate to the agent terminal window in normal mode
+2. Press `<leader>i`, then press any key — it is sent directly to the TUI app
+3. You return to normal mode immediately after
+
+**Continuous passthrough mode** (double the passthrough key — `<leader>ii` by default):
+1. Press `<leader>ii` to enter passthrough mode — all keys are forwarded to the TUI app
+2. The status line shows `-- PASS THROUGH (Esc to exit) --`
+3. Press `Esc` to exit passthrough mode and return to normal mode
+
+> **Tip:** This is useful for interacting with full-screen TUI tools (e.g. `vim`, `htop`, `lazygit`) running inside an agent terminal session.
 
 #### Example Workflow
 
@@ -279,6 +300,7 @@ require("neovim-cursor").setup({
     rename = "<F2>",     -- Rename current agent terminal
     select = "<F6>",     -- Select agent terminal
     prompt_last = "<F12>", -- Open or switch to last prompt buffer
+    passthrough = "<leader>i", -- Send next key (or enter passthrough mode) to TUI app
   },
 })
 ```
@@ -367,6 +389,7 @@ require("neovim-cursor").setup({
     rename = "<leader>r", -- Use <leader>r for rename
     select = "<leader>t", -- Use <leader>t for select
     prompt_last = "<leader>l", -- Open or switch to last prompt buffer
+    passthrough = "<leader>i", -- Send next key (or enter passthrough mode) to TUI app
   },
 })
 ```
