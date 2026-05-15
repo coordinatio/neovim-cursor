@@ -1,4 +1,4 @@
--- Shared utility helpers for neovim-cursor plugin
+-- Shared utility helpers for yapt.nvim plugin
 --
 -- Centralizes small helpers that several modules need (mostly buffer
 -- discovery for "what should I show after I stole this window?" logic).

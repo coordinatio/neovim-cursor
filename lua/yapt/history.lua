@@ -1,20 +1,20 @@
--- Prompt history workflow for neovim-cursor plugin
+-- Prompt history workflow for yapt.nvim plugin
 --
 -- Provides:
--- - Creating a new markdown file in ${CWD}/.nvim-cursor/history/ with timestamp in filename
--- - Sending the current file contents to cursor-agent
+-- - Creating a new markdown file in ${CWD}/.nvim-yapt/history/ with timestamp in filename
+-- - Sending the current file contents to the active terminal
 --
-local terminal = require("neovim-cursor.terminal")
-local tabs = require("neovim-cursor.tabs")
-local picker = require("neovim-cursor.picker")
-local util = require("neovim-cursor.util")
+local terminal = require("yapt.terminal")
+local tabs = require("yapt.tabs")
+local picker = require("yapt.picker")
+local util = require("yapt.util")
 
 local M = {}
 
 -- Create history directory path (relative to CWD)
 local function history_dir_path(cfg)
   local cwd = vim.fn.getcwd()
-  local dir = (cfg and cfg.history and cfg.history.dir) or ".nvim-cursor/history"
+  local dir = (cfg and cfg.history and cfg.history.dir) or ".nvim-yapt/history"
   if dir:match("^/") then
     return dir
   end
@@ -60,7 +60,6 @@ local function list_history_files_sorted(config)
       local ts = parse_timestamp_from_filename(f)
 
       if not ts then
-        -- getftime() returns seconds since epoch, or -1 on error
         local ft = vim.fn.getftime(fullpath)
         if type(ft) == "number" and ft >= 0 then
           ts = ft
@@ -129,12 +128,9 @@ local function close_sent_prompt_buffer_if_needed(buf, config)
   local replacement = util.find_file_buffer(buf) or util.find_empty_unnamed_buffer(buf)
 
   if not replacement then
-    -- No valid buffer to switch to, leave the prompt buffer open
     return
   end
 
-  -- To preserve split layout, first replace this prompt buffer in every window
-  -- that currently shows it, then delete the prompt buffer itself.
   replace_prompt_in_open_windows(buf, replacement)
 
   local ok, err = pcall(vim.api.nvim_buf_delete, buf, {})
@@ -184,15 +180,15 @@ local function current_buffer_text(buf)
   return text .. "\n"
 end
 
--- Send buffered text to whichever agent is currently active and report success.
-local function send_to_active_agent(text, source_buf, config, success_message)
+-- Send buffered text to whichever terminal is currently active and report success.
+local function send_to_active_terminal(text, source_buf, config, success_message)
   local active_id = tabs.get_active()
   if not active_id or not terminal.is_running(active_id) then
     return
   end
   local sent = terminal.send_text(text, active_id)
   if sent then
-    vim.notify(success_message or "Sent current file contents to agent", vim.log.levels.INFO)
+    vim.notify(success_message or "Sent current file contents to terminal", vim.log.levels.INFO)
     close_sent_prompt_buffer_if_needed(source_buf, config)
   end
 end
@@ -207,7 +203,7 @@ local function pick_create_and_send(config, text, source_buf, success_message, d
 
     tabs.create_terminal(nil, config, cmd, display_mode)
     vim.defer_fn(function()
-      send_to_active_agent(text, source_buf, config, success_message)
+      send_to_active_terminal(text, source_buf, config, success_message)
     end, 200)
   end)
 end
@@ -227,12 +223,12 @@ local function current_file_text_or_notify()
   return buf, current_buffer_text(buf)
 end
 
--- Send current buffer's file contents to cursor-agent.
+-- Send current buffer's file contents to the active terminal.
 -- Ensures at least one terminal exists and shows it (in its preferred
--- display mode, so a fullscreen agent stays fullscreen), then sends the text.
--- Saves the current buffer if modified so the file exists on disk for the agent.
+-- display mode, so a fullscreen terminal stays fullscreen), then sends the text.
+-- Saves the current buffer if modified so the file exists on disk for the CLI.
 -- @param config Plugin config (for terminal/tabs)
-function M.send_prompt_file_to_agent(config)
+function M.send_prompt_file_to_terminal(config)
   local source_buf, text_to_send = current_file_text_or_notify()
   if not source_buf then
     return
@@ -254,7 +250,6 @@ function M.send_prompt_file_to_agent(config)
   local stored_cmd = term_meta and term_meta.command
 
   if not t_state.is_visible then
-    -- Honor the agent's last preferred display mode (split or fullscreen).
     terminal.show_in_preferred_mode(config, last_id, stored_cmd)
   elseif t_state.win and vim.api.nvim_win_is_valid(t_state.win) then
     vim.api.nvim_set_current_win(t_state.win)
@@ -262,16 +257,16 @@ function M.send_prompt_file_to_agent(config)
   end
 
   vim.defer_fn(function()
-    send_to_active_agent(text_to_send, source_buf, config)
+    send_to_active_terminal(text_to_send, source_buf, config)
   end, 100)
 end
 
--- Send current buffer's file contents to cursor-agent, forcing fullscreen display.
--- Like send_prompt_file_to_agent, but always shows the agent in fullscreen
+-- Send current buffer's file contents to the active terminal, forcing fullscreen display.
+-- Like send_prompt_file_to_terminal, but always shows the terminal in fullscreen
 -- (promoting from split if needed) before sending.
--- Saves the current buffer if modified so the file exists on disk for the agent.
+-- Saves the current buffer if modified so the file exists on disk for the CLI.
 -- @param config Plugin config (for terminal/tabs)
-function M.send_prompt_file_to_agent_fullscreen(config)
+function M.send_prompt_file_to_terminal_fullscreen(config)
   local source_buf, text_to_send = current_file_text_or_notify()
   if not source_buf then
     return
@@ -292,7 +287,6 @@ function M.send_prompt_file_to_agent_fullscreen(config)
   local stored_cmd = term_meta and term_meta.command
 
   if terminal.is_fullscreen_active(last_id) then
-    -- Already fullscreen; just refocus the terminal window if possible.
     local t_state = terminal.get_state(last_id)
     if t_state.win and vim.api.nvim_win_is_valid(t_state.win) then
       vim.api.nvim_set_current_win(t_state.win)
@@ -301,26 +295,23 @@ function M.send_prompt_file_to_agent_fullscreen(config)
   else
     prepare_prompt_buffer_for_fullscreen(source_buf, config)
 
-    -- Either hidden, or visible in a split. toggle_fullscreen handles both:
-    -- it hides the split first and then takes over the focused window.
     terminal.toggle_fullscreen(config, last_id, stored_cmd)
   end
 
   vim.defer_fn(function()
-    send_to_active_agent(text_to_send, source_buf, config)
+    send_to_active_terminal(text_to_send, source_buf, config)
   end, 100)
 end
 
--- Deprecated compatibility shim for CursorAgentPromptSendNew /
--- keybindings.prompt_send_new. Creates a fresh split agent, then sends the
+-- Deprecated compatibility shim. Creates a fresh split terminal, then sends the
 -- current file contents to it.
-function M.send_prompt_file_to_new_agent(config)
+function M.send_prompt_file_to_new_terminal(config)
   local source_buf, text_to_send = current_file_text_or_notify()
   if not source_buf then
     return
   end
 
-  pick_create_and_send(config, text_to_send, source_buf, "Sent current file contents to new agent")
+  pick_create_and_send(config, text_to_send, source_buf, "Sent current file contents to new terminal")
 end
 
 -- Return full path of the most recent prompt file in history (by timestamp in filename).
@@ -352,7 +343,7 @@ end
 function M.open_history_in_telescope(config)
   local ok = pcall(require, "telescope")
   if not ok then
-    vim.notify("telescope.nvim is required for CursorAgentHistoryTelescope", vim.log.levels.WARN)
+    vim.notify("telescope.nvim is required for PTHistory", vim.log.levels.WARN)
     return
   end
 
@@ -372,7 +363,6 @@ function M.open_history_in_telescope(config)
 
   local results = {}
   for _, e in ipairs(entries) do
-    -- Feed relative names to the file entry maker with cwd=dir
     table.insert(results, e.name)
   end
 
@@ -380,8 +370,6 @@ function M.open_history_in_telescope(config)
     cwd = dir,
   })
 
-  -- Ensure stable chronological order when prompt is empty, but keep
-  -- normal Telescope file filtering/sorting when the user types.
   local base_sorter = conf.file_sorter({})
   local chronological_sorter = sorters.Sorter:new({
     discard = base_sorter.discard,
@@ -399,9 +387,6 @@ function M.open_history_in_telescope(config)
     end,
   })
 
-  -- Use a custom file previewer so we can enable wrapping in the preview window.
-  -- Telescope's default file previewer typically uses 'nowrap', which is painful for
-  -- long prompt lines.
   local history_previewer = previewers.new_buffer_previewer({
     title = "Prompt preview",
     define_preview = function(self, entry, _status)
@@ -411,10 +396,8 @@ function M.open_history_in_telescope(config)
         return
       end
 
-      -- Reuse Telescope's built-in file loading logic (respects previewer config).
       previewers.buffer_previewer_maker(path, self.state.bufnr, { winid = self.state.winid })
 
-      -- Enable wrapping in the preview window.
       local winid = self.state.winid
       if winid and vim.api.nvim_win_is_valid(winid) then
         if vim.api.nvim_set_option_value then

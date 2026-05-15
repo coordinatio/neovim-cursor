@@ -1,6 +1,6 @@
--- Multi-terminal state management for neovim-cursor plugin
+-- Multi-terminal state management for yapt.nvim plugin
 --
--- This module manages the metadata for multiple agent terminals, providing:
+-- This module manages the metadata for multiple terminals, providing:
 -- - Terminal creation and deletion
 -- - Active/last terminal tracking for smart toggling
 -- - Terminal renaming and listing
@@ -11,8 +11,8 @@
 -- - The actual terminal buffers/windows are managed by terminal.lua
 -- - Cleanup callbacks ensure state stays synchronized when terminals exit
 --
-local terminal = require("neovim-cursor.terminal")
-local config_module = require("neovim-cursor.config")
+local terminal = require("yapt.terminal")
+local config_module = require("yapt.config")
 
 local M = {}
 
@@ -49,7 +49,7 @@ local function generate_id()
 end
 
 local function generate_name(config)
-  local prefix = "Agent"
+  local prefix = "Term"
   if config and config.terminal and config.terminal.default_name then
     prefix = config.terminal.default_name
   end

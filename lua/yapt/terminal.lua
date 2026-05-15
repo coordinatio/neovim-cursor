@@ -1,4 +1,4 @@
--- Terminal management for neovim-cursor plugin
+-- Terminal management for yapt.nvim plugin
 --
 -- This module handles the low-level terminal operations:
 -- - Creating terminal buffers and windows
@@ -14,8 +14,8 @@
 -- - Tracks at most one fullscreen terminal at a time (singleton state)
 -- - Cleanup callbacks notify tabs.lua when terminals exit
 --
-local config_module = require("neovim-cursor.config")
-local util = require("neovim-cursor.util")
+local config_module = require("yapt.config")
+local util = require("yapt.util")
 
 local M = {}
 
@@ -26,7 +26,7 @@ local default_id = "default"  -- Default terminal ID for backward compatibility
 local cleanup_callbacks = {}  -- Callbacks called when a terminal exits (used by tabs.lua)
 
 local passthrough_active = false
-local passthrough_ns = vim.api.nvim_create_namespace("neovim-cursor-passthrough")
+local passthrough_ns = vim.api.nvim_create_namespace("yapt-passthrough")
 
 local special_key_defs = {
   {"<Up>",       "\x1b[A"},
@@ -434,7 +434,7 @@ local function create_terminal_instance(id, config, command, display_mode)
   term_keys.exit = term_keys.hide
 
   if term_keys.exit and term_keys.exit ~= "" then
-    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.exit, '<C-\\><C-n>:lua require("neovim-cursor").hide_from_terminal_handler()<CR>', {
+    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.exit, '<C-\\><C-n>:lua require("yapt").hide_from_terminal_handler()<CR>', {
       noremap = true,
       silent = true,
       desc = "Hide terminal window"
@@ -442,7 +442,7 @@ local function create_terminal_instance(id, config, command, display_mode)
   end
 
   if term_keys.hide and term_keys.hide ~= "" then
-    vim.api.nvim_buf_set_keymap(term.buf, 'n', term_keys.hide, ':lua require("neovim-cursor").hide_from_terminal_handler()<CR>', {
+    vim.api.nvim_buf_set_keymap(term.buf, 'n', term_keys.hide, ':lua require("yapt").hide_from_terminal_handler()<CR>', {
       noremap = true,
       silent = true,
       desc = "Hide terminal window"
@@ -450,31 +450,31 @@ local function create_terminal_instance(id, config, command, display_mode)
   end
 
   if term_keys.new and term_keys.new ~= "" then
-    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.new, '<C-\\><C-n>:lua require("neovim-cursor").new_terminal_from_terminal_handler()<CR>', {
+    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.new, '<C-\\><C-n>:lua require("yapt").new_terminal_from_terminal_handler()<CR>', {
       noremap = true,
       silent = true,
-      desc = "Create new agent terminal (hide current first)"
+      desc = "Create new terminal (hide current first)"
     })
   end
 
   if term_keys.rename and term_keys.rename ~= "" then
-    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.rename, '<C-\\><C-n>:lua require("neovim-cursor").rename_terminal_handler()<CR>', {
+    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.rename, '<C-\\><C-n>:lua require("yapt").rename_terminal_handler()<CR>', {
       noremap = true,
       silent = true,
-      desc = "Rename current agent window"
+      desc = "Rename current terminal"
     })
   end
 
   if term_keys.select and term_keys.select ~= "" then
-    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.select, '<C-\\><C-n>:lua require("neovim-cursor").select_terminal_handler()<CR>', {
+    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.select, '<C-\\><C-n>:lua require("yapt").select_terminal_handler()<CR>', {
       noremap = true,
       silent = true,
-      desc = "Select agent terminal"
+      desc = "Select terminal"
     })
   end
 
   if term_keys.prompt_last and term_keys.prompt_last ~= "" then
-    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.prompt_last, '<C-\\><C-n>:lua require("neovim-cursor").open_last_prompt_from_terminal_handler()<CR>', {
+    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.prompt_last, '<C-\\><C-n>:lua require("yapt").open_last_prompt_from_terminal_handler()<CR>', {
       noremap = true,
       silent = true,
       desc = "Open last prompt file"
@@ -482,20 +482,20 @@ local function create_terminal_instance(id, config, command, display_mode)
   end
 
   if term_keys.toggle_fullscreen and term_keys.toggle_fullscreen ~= "" then
-    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.toggle_fullscreen, '<C-\\><C-n>:lua require("neovim-cursor").fullscreen_toggle_from_terminal_handler()<CR>', {
+    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.toggle_fullscreen, '<C-\\><C-n>:lua require("yapt").fullscreen_toggle_from_terminal_handler()<CR>', {
       noremap = true,
       silent = true,
-      desc = "Toggle fullscreen agent mode"
+      desc = "Toggle fullscreen mode"
     })
-    vim.api.nvim_buf_set_keymap(term.buf, 'n', term_keys.toggle_fullscreen, ':lua require("neovim-cursor").fullscreen_toggle_from_terminal_handler()<CR>', {
+    vim.api.nvim_buf_set_keymap(term.buf, 'n', term_keys.toggle_fullscreen, ':lua require("yapt").fullscreen_toggle_from_terminal_handler()<CR>', {
       noremap = true,
       silent = true,
-      desc = "Toggle fullscreen agent mode"
+      desc = "Toggle fullscreen mode"
     })
   end
 
   if term_keys.passthrough and term_keys.passthrough ~= "" then
-    local passthrough_rhs = '<Cmd>lua require("neovim-cursor.terminal").send_passthrough_key()<CR>'
+    local passthrough_rhs = '<Cmd>lua require("yapt.terminal").send_passthrough_key()<CR>'
     vim.api.nvim_buf_set_keymap(term.buf, 'n', term_keys.passthrough, passthrough_rhs, {
       noremap = true,
       silent = true,
@@ -508,7 +508,7 @@ local function create_terminal_instance(id, config, command, display_mode)
     else
       double_key = term_keys.passthrough .. term_keys.passthrough
     end
-    local mode_rhs = '<Cmd>lua require("neovim-cursor.terminal").enter_passthrough_mode()<CR>'
+    local mode_rhs = '<Cmd>lua require("yapt.terminal").enter_passthrough_mode()<CR>'
     vim.api.nvim_buf_set_keymap(term.buf, 'n', double_key, mode_rhs, {
       noremap = true,
       silent = true,
@@ -530,12 +530,12 @@ end
 -- Toggle terminal visibility.
 --
 -- Semantics:
---   - If the terminal is visible (in any mode) → hide it.
---   - Otherwise → show it in split mode (creating it if needed).
+--   - If the terminal is visible (in any mode) -> hide it.
+--   - Otherwise -> show it in split mode (creating it if needed).
 --
 -- Pressing the split-toggle key while the terminal is fullscreen no longer
 -- silently demotes it to a split: it just hides, matching the expectation
--- that "<A-->" toggles agent visibility.
+-- that the toggle key toggles visibility.
 function M.toggle(config, id, command)
   id = id or active_id or default_id
   sync_fullscreen_state()
@@ -558,11 +558,11 @@ end
 -- Toggle a terminal in fullscreen mode.
 --
 -- Semantics:
---   - If this terminal is already shown fullscreen → hide it (giving the
+--   - If this terminal is already shown fullscreen -> hide it (giving the
 --     window back to the user's previous buffer).
---   - If it is shown in a split → hide the split, then take over the now
+--   - If it is shown in a split -> hide the split, then take over the now
 --     focused window.
---   - Otherwise → show it (creating if needed) in fullscreen mode.
+--   - Otherwise -> show it (creating if needed) in fullscreen mode.
 function M.toggle_fullscreen(config, id, command)
   id = id or active_id or default_id
   sync_fullscreen_state()
@@ -580,7 +580,7 @@ function M.toggle_fullscreen(config, id, command)
 
   -- If this terminal is currently visible in a split, close that split.
   -- After nvim_win_hide focus shifts to a remaining window, which is the
-  -- one we want to take over for fullscreen — no need for vim.schedule.
+  -- one we want to take over for fullscreen -- no need for vim.schedule.
   if is_visible(id) then
     hide(id)
   end
@@ -594,8 +594,8 @@ function M.toggle_fullscreen(config, id, command)
 end
 
 -- Show the terminal in its preferred (last used) display mode.
--- Used by callers that want to *make the agent visible* without toggling
--- (e.g. send_prompt_file_to_agent), so the agent doesn't get demoted from
+-- Used by callers that want to *make the terminal visible* without toggling
+-- (e.g. send_prompt_file_to_terminal), so the terminal doesn't get demoted from
 -- fullscreen to split unexpectedly. No-op if already visible.
 function M.show_in_preferred_mode(config, id, command)
   id = id or active_id or default_id
@@ -633,7 +633,7 @@ function M.send_text(text, id)
   id = id or active_id or default_id
 
   if not M.is_running(id) then
-    vim.notify("Cursor agent terminal is not running", vim.log.levels.WARN)
+    vim.notify("Terminal is not running", vim.log.levels.WARN)
     return false
   end
 

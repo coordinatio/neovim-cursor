@@ -1,35 +1,35 @@
--- Default configuration for neovim-cursor plugin
+-- Default configuration for yapt.nvim plugin
 local M = {}
 
 M.defaults = {
-  -- Keybinding for toggling cursor agent (backward compatibility)
-  keybinding = "<A-->",
+  -- Keybinding for toggling terminal (backward compatibility)
+  keybinding = "<A-`>",
 
   -- Multi-terminal keybindings
   keybindings = {
-    toggle = "<A-->",                -- Toggle agent window in split (show last active)
-    toggle_fullscreen = "<A-=>",     -- Toggle agent window fullscreen (show last active)
-    new = "<leader>an",              -- Create new agent terminal
-    new_fullscreen = "<leader>aN",   -- Create new agent terminal in fullscreen
-    select = "<F6>",                 -- Select agent terminal (fuzzy picker)
-    rename = "<leader>ar",           -- Rename current agent terminal
-    prompt_new = "<leader>ah",       -- Create new prompt file in .nvim-cursor/history
-    prompt_send = "<leader>ae",      -- Send current file contents to agent
-    prompt_send_fullscreen = "<leader>aE",  -- Send current file contents to agent (force fullscreen)
+    toggle = "<A-`>",                -- Toggle terminal window in split (show last active)
+    toggle_fullscreen = "<A-=>",     -- Toggle terminal window fullscreen (show last active)
+    new = "<leader>an",              -- Create new terminal
+    new_fullscreen = "<leader>aN",   -- Create new terminal in fullscreen
+    select = "<F6>",                 -- Select terminal (fuzzy picker)
+    rename = "<leader>ar",           -- Rename current terminal
+    prompt_new = "<leader>ah",       -- Create new prompt file in .nvim-yapt/history
+    prompt_send = "<leader>ae",      -- Send current file contents to terminal
+    prompt_send_fullscreen = "<leader>aE",  -- Send current file contents to terminal (force fullscreen)
     prompt_history_telescope = "<leader>aH",  -- Open prompt history dir in Telescope
     prompt_last = "<leader>al",      -- Open or switch to last prompt buffer
     copy_link = "<leader>ac",        -- Copy link (normal: @file, visual: @file:start-end) to unnamed register
   },
 
-  -- Prompt history (md files for cursor-agent tasks)
+  -- Prompt history (md files for terminal tasks)
   history = {
-    dir = ".nvim-cursor/history",  -- Relative to CWD
+    dir = ".nvim-yapt/history",  -- Relative to CWD
   },
 
   -- Terminal naming configuration
   terminal = {
-    default_name = "Agent",      -- Default name prefix for terminals
-    auto_number = true,          -- Auto-append numbers (Agent 1, Agent 2, etc.)
+    default_name = "Term",      -- Default name prefix for terminals
+    auto_number = true,          -- Auto-append numbers (Term 1, Term 2, etc.)
   },
 
   -- Terminal split configuration
@@ -41,7 +41,7 @@ M.defaults = {
   -- CLI command to run (string or array of strings)
   -- When an array is provided, a Telescope picker will appear when creating
   -- a new terminal, letting you choose which command to launch.
-  command = "cursor agent",
+  command = "opencode",
 
   -- Terminal options
   term_opts = {
@@ -51,11 +51,11 @@ M.defaults = {
 
   -- Terminal mode keybindings (when inside terminal buffer)
   terminal_keybindings = {
-    hide = "<A-->",      -- Hide terminal window (terminal + normal mode in terminal)
+    hide = "<A-`>",      -- Hide terminal window (terminal + normal mode in terminal)
     toggle_fullscreen = "<A-=>", -- Toggle fullscreen mode
-    new = "<F7>",        -- Create new agent terminal
-    rename = "<F2>",     -- Rename current agent window
-    select = "<F6>",     -- Select agent terminal
+    new = "<F7>",        -- Create new terminal
+    rename = "<F2>",     -- Rename current terminal
+    select = "<F6>",     -- Select terminal
     prompt_last = "<F12>", -- Open or switch to last prompt buffer
     passthrough = "<leader>i", -- Send next key (or enter passthrough mode) to TUI app
   },
@@ -73,6 +73,41 @@ local function warn_once(key, message)
   end)
 end
 
+-- Old history directories that should be migrated to the current default.
+local legacy_history_dirs = {
+  ".nvim-cursor/history",
+}
+
+local function migrate_history_dir(target_dir)
+  if target_dir:match("^/") then return end
+
+  local cwd = vim.fn.getcwd()
+  local target_path = cwd .. "/" .. target_dir
+
+  if vim.fn.isdirectory(target_path) == 1 then return end
+
+  for _, legacy in ipairs(legacy_history_dirs) do
+    local legacy_path = cwd .. "/" .. legacy
+    if vim.fn.isdirectory(legacy_path) == 1 then
+      local parent = vim.fn.fnamemodify(target_path, ":h")
+      vim.fn.mkdir(parent, "p")
+      local ok = vim.fn.rename(legacy_path, target_path)
+      if ok == 0 then
+        vim.notify(
+          "[yapt] Migrated prompt history from " .. legacy .. " to " .. target_dir,
+          vim.log.levels.INFO
+        )
+      else
+        vim.notify(
+          "[yapt] Failed to migrate " .. legacy .. " to " .. target_dir,
+          vim.log.levels.WARN
+        )
+      end
+      return
+    end
+  end
+end
+
 -- Deprecated options: tell the user once that their config still works,
 -- but should be migrated.
 local function check_deprecated_options(user_config)
@@ -80,9 +115,9 @@ local function check_deprecated_options(user_config)
 
   if user_config.keybindings.prompt_send_new ~= nil then
     warn_once("prompt_send_new",
-      "[neovim-cursor] `keybindings.prompt_send_new` is deprecated but still supported. " ..
+      "[yapt] `keybindings.prompt_send_new` is deprecated but still supported. " ..
       "The default <leader>aE slot is now used by `keybindings.prompt_send_fullscreen`; " ..
-      "create a new agent first, then use `keybindings.prompt_send` (or `keybindings.prompt_send_fullscreen`)."
+      "create a new terminal first, then use `keybindings.prompt_send` (or `keybindings.prompt_send_fullscreen`)."
     )
   end
 end
@@ -93,6 +128,10 @@ function M.setup(user_config)
   user_config = user_config or {}
 
   check_deprecated_options(user_config)
+
+  if not user_config.history then
+    migrate_history_dir(M.defaults.history.dir)
+  end
 
   -- Backward compatibility: if old 'keybinding' provided but not 'keybindings', migrate it
   if user_config.keybinding and not user_config.keybindings then
@@ -116,7 +155,7 @@ function M.resolve_command(command, config)
   if command then return command end
   if type(config.command) == "string" then return config.command end
   if type(config.command) == "table" and #config.command > 0 then return config.command[1] end
-  return "cursor agent"
+  return "opencode"
 end
 
 function M.resolve_commands(config)
@@ -127,7 +166,7 @@ function M.resolve_commands(config)
   if type(cmd) == "string" then
     return { cmd }
   end
-  return { "cursor agent" }
+  return { "opencode" }
 end
 
 return M

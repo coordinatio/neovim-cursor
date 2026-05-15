@@ -1,7 +1,7 @@
--- Terminal picker for neovim-cursor plugin
+-- Terminal picker for yapt.nvim plugin
 --
--- Provides fuzzy finder UI for selecting agent terminals with:
--- - Telescope integration (preferred) with live preview of agent conversations
+-- Provides fuzzy finder UI for selecting terminals with:
+-- - Telescope integration (preferred) with live preview of terminal content
 -- - vim.ui.select fallback for users without Telescope
 -- - Rename capability directly from picker with <C-r>
 -- - Automatic return to terminal insert mode after selection
@@ -9,12 +9,12 @@
 -- Features:
 -- - Live preview showing terminal buffer content
 -- - Status indicators (running/stopped, age)
--- - Fuzzy search by agent name
+-- - Fuzzy search by terminal name
 -- - Picker automatically reopens after rename for seamless workflow
 --
-local tabs = require("neovim-cursor.tabs")
-local terminal = require("neovim-cursor.terminal")
-local config_module = require("neovim-cursor.config")
+local tabs = require("yapt.tabs")
+local terminal = require("yapt.terminal")
+local config_module = require("yapt.config")
 
 local M = {}
 
@@ -75,7 +75,7 @@ function M.pick_command(config, callback)
   local commands = config_module.resolve_commands(config)
 
   if #commands == 0 then
-    callback("cursor agent")
+    callback("opencode")
     return
   end
 
@@ -96,15 +96,17 @@ end
 -- @param term Terminal metadata object
 -- @return string Formatted display string
 local function format_terminal_display(term)
-  local status_icon = "?"  -- Running
-  local status_text = "running"
-  
-  -- Check if terminal is actually running
-  if not terminal.is_running(term.id) then
-    status_icon = "?"  -- Stopped
+  local status_icon
+  local status_text
+
+  if terminal.is_running(term.id) then
+    status_icon = "?"
+    status_text = "running"
+  else
+    status_icon = "?"
     status_text = "stopped"
   end
-  
+
   -- Calculate age
   local age_seconds = os.time() - term.created_at
   local age_str
@@ -115,8 +117,7 @@ local function format_terminal_display(term)
   else
     age_str = math.floor(age_seconds / 3600) .. "h ago"
   end
-  
-  -- Format: "? Agent 1 (running, 5m ago)"
+
   return string.format("%s %s (%s, %s)", status_icon, term.name, status_text, age_str)
 end
 
@@ -129,14 +130,14 @@ local function pick_with_telescope(terminals, config, callback)
   if not ok then
     return false
   end
-  
+
   local pickers = require("telescope.pickers")
   local finders = require("telescope.finders")
   local conf = require("telescope.config").values
   local actions = require("telescope.actions")
   local action_state = require("telescope.actions.state")
   local previewers = require("telescope.previewers")
-  
+
   -- Build entries for telescope
   local entries = {}
   for _, term in ipairs(terminals) do
@@ -150,7 +151,7 @@ local function pick_with_telescope(terminals, config, callback)
 
   -- Create a custom previewer for terminal buffers
   local terminal_previewer = previewers.new_buffer_previewer({
-    title = "Agent Conversation",
+    title = "Terminal Preview",
     define_preview = function(self, entry, status)
       -- Get the terminal info
       local term_info = terminal._get_terminal(entry.id)
@@ -165,7 +166,6 @@ local function pick_with_telescope(terminals, config, callback)
         -- Optional: Set filetype for syntax highlighting
         vim.api.nvim_buf_set_option(self.state.bufnr, 'filetype', 'terminal')
       else
-        -- Terminal not running or buffer invalid
         vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, {
           "Terminal not running",
           "",
@@ -176,7 +176,7 @@ local function pick_with_telescope(terminals, config, callback)
   })
 
   pickers.new({}, {
-    prompt_title = "Select Cursor Agent Terminal",
+    prompt_title = "Select Terminal",
     finder = finders.new_table({
       results = entries,
       entry_maker = function(entry)
@@ -197,30 +197,27 @@ local function pick_with_telescope(terminals, config, callback)
         local selection = action_state.get_selected_entry()
         if selection then
           callback(selection.id)
-          -- Enter insert mode in the terminal after switching
           vim.schedule(function()
             vim.cmd("startinsert")
           end)
         end
       end)
-      
+
       -- Custom action: rename terminal with <C-r>
       map("i", "<C-r>", function()
         local selection = action_state.get_selected_entry()
         if selection then
           local term = selection.value
           actions.close(prompt_bufnr)
-          
-          -- Prompt for new name
+
           vim.schedule(function()
             vim.ui.input({
-              prompt = "Rename agent window: ",
+              prompt = "Rename terminal: ",
               default = term.name,
             }, function(input)
               if input and input ~= "" then
                 if tabs.rename_terminal(selection.id, input) then
                   vim.notify("Terminal renamed to: " .. input, vim.log.levels.INFO)
-                  -- Re-open picker to show updated names
                   vim.schedule(function()
                     M.pick_terminal(config, callback)
                   end)
@@ -232,24 +229,22 @@ local function pick_with_telescope(terminals, config, callback)
           end)
         end
       end)
-      
+
       -- Also map <C-r> in normal mode for Telescope
       map("n", "<C-r>", function()
         local selection = action_state.get_selected_entry()
         if selection then
           local term = selection.value
           actions.close(prompt_bufnr)
-          
-          -- Prompt for new name
+
           vim.schedule(function()
             vim.ui.input({
-              prompt = "Rename agent window: ",
+              prompt = "Rename terminal: ",
               default = term.name,
             }, function(input)
               if input and input ~= "" then
                 if tabs.rename_terminal(selection.id, input) then
                   vim.notify("Terminal renamed to: " .. input, vim.log.levels.INFO)
-                  -- Re-open picker to show updated names
                   vim.schedule(function()
                     M.pick_terminal(config, callback)
                   end)
@@ -261,11 +256,11 @@ local function pick_with_telescope(terminals, config, callback)
           end)
         end
       end)
-      
+
       return true
     end,
   }):find()
-  
+
   return true
 end
 
@@ -273,24 +268,22 @@ end
 -- @param terminals Array of terminal metadata
 -- @param callback function(selected_id) Called with selected terminal ID
 local function pick_with_ui_select(terminals, callback)
-  -- Build display items
   local items = {}
   local id_map = {}
-  
+
   for i, term in ipairs(terminals) do
     items[i] = format_terminal_display(term)
     id_map[i] = term.id
   end
-  
+
   vim.ui.select(items, {
-    prompt = "Select Cursor Agent Terminal:",
+    prompt = "Select Terminal:",
     format_item = function(item)
       return item
     end,
   }, function(choice, idx)
     if idx then
       callback(id_map[idx])
-      -- Enter insert mode in the terminal after switching
       vim.schedule(function()
         vim.cmd("startinsert")
       end)
@@ -303,29 +296,24 @@ end
 -- @param callback function(selected_id) Called with selected terminal ID
 function M.pick_terminal(config, callback)
   local terminals = tabs.list_terminals()
-  
-  -- Handle edge cases
+
   if #terminals == 0 then
     vim.notify("No terminals available. Create one with <leader>an", vim.log.levels.WARN)
     return
   end
-  
+
   if #terminals == 1 then
-    -- Only one terminal, auto-select it (or show picker anyway based on config)
-    -- For now, let's auto-select to avoid unnecessary UI
     callback(terminals[1].id)
     return
   end
-  
-  -- Try Telescope first, fall back to vim.ui.select
+
   if has_telescope() then
     local success = pick_with_telescope(terminals, config, callback)
     if success then
       return
     end
   end
-  
-  -- Fallback to vim.ui.select
+
   pick_with_ui_select(terminals, callback)
 end
 
