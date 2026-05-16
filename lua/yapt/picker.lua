@@ -22,7 +22,7 @@ local function has_telescope()
   return pcall(require, "telescope")
 end
 
-local function pick_command_with_telescope(commands, callback)
+local function pick_command_with_telescope(entries, callback)
   if not has_telescope() then
     return false
   end
@@ -36,12 +36,12 @@ local function pick_command_with_telescope(commands, callback)
   pickers.new({}, {
     prompt_title = "Select Command",
     finder = finders.new_table({
-      results = commands,
+      results = entries,
       entry_maker = function(entry)
         return {
-          value = entry,
-          display = entry,
-          ordinal = entry,
+          value = entry.command,
+          display = entry.label,
+          ordinal = entry.label .. " " .. entry.command,
         }
       end,
     }),
@@ -61,35 +61,35 @@ local function pick_command_with_telescope(commands, callback)
   return true
 end
 
-local function pick_command_with_ui_select(commands, callback)
-  vim.ui.select(commands, {
+local function pick_command_with_ui_select(entries, callback)
+  local labels = {}
+  for _, e in ipairs(entries) do
+    table.insert(labels, e.label)
+  end
+
+  vim.ui.select(labels, {
     prompt = "Select Command:",
-  }, function(choice)
-    if choice then
-      callback(choice)
+  }, function(_, idx)
+    if idx then
+      callback(entries[idx].command)
     end
   end)
 end
 
 function M.pick_command(config, callback)
-  local commands = config_module.resolve_commands(config)
+  local entries = config_module.resolve_command_entries(config)
 
-  if #commands == 0 then
-    callback("opencode")
+  if #entries == 1 then
+    callback(entries[1].command)
     return
   end
 
-  if #commands == 1 then
-    callback(commands[1])
-    return
-  end
-
-  local success = pick_command_with_telescope(commands, callback)
+  local success = pick_command_with_telescope(entries, callback)
   if success then
     return
   end
 
-  pick_command_with_ui_select(commands, callback)
+  pick_command_with_ui_select(entries, callback)
 end
 
 -- Format terminal info for display in picker

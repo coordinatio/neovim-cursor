@@ -235,8 +235,13 @@ require("yapt").setup({
   -- CLI command to run (string or table)
   -- When a table is provided, a Telescope picker appears when creating
   -- a new terminal, letting you choose which command to launch.
+  -- Supports plain strings, { "Label", "command" }, or { label=.., command=.. }.
   command = "opencode",
   -- command = { "opencode", "cursor agent", "claude", "aider" },
+  -- command = {
+  --   { label = "OpenCode",     command = "opencode" },
+  --   { label = "Cursor Agent", command = "cursor agent" },
+  -- },
 
   term_opts = {
     on_open  = nil,
@@ -279,6 +284,30 @@ require("yapt").setup({
 ```
 
 When multiple commands are configured, a Telescope picker appears every time a new terminal is created.
+
+#### Command Labels
+
+For a clearer picker experience, use labeled commands. The label is shown in the Telescope picker while the command string is what actually runs:
+
+```lua
+require("yapt").setup({
+  command = {
+    { label = "OpenCode",      command = "opencode" },
+    { label = "Cursor Agent",  command = "cursor agent" },
+    { label = "Claude Code",   command = "claude" },
+    { label = "Aider",         command = "aider" },
+  },
+})
+```
+
+You can also use the short form `{ "Label", "command" }`:
+
+```lua
+command = {
+  { "OpenCode", "opencode" },
+  { "Claude Code", "claude" },
+}
+```
 
 #### Left Split with 40% Width
 

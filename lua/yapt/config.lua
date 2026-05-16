@@ -158,15 +158,33 @@ function M.resolve_command(command, config)
   return "opencode"
 end
 
-function M.resolve_commands(config)
+function M.resolve_command_entries(config)
   local cmd = config.command
-  if type(cmd) == "table" then
-    return cmd
-  end
   if type(cmd) == "string" then
-    return { cmd }
+    return { { label = cmd, command = cmd } }
   end
-  return { "opencode" }
+  if type(cmd) == "table" then
+    local entries = {}
+    for _, entry in ipairs(cmd) do
+      if type(entry) == "string" and #entry > 0 then
+        table.insert(entries, { label = entry, command = entry })
+      elseif type(entry) == "table" then
+        local lbl, cmd
+        if type(entry.label) == "string" and #entry.label > 0
+          and type(entry.command) == "string" and #entry.command > 0 then
+          lbl, cmd = entry.label, entry.command
+        elseif type(entry[1]) == "string" and #entry[1] > 0
+          and type(entry[2]) == "string" and #entry[2] > 0 then
+          lbl, cmd = entry[1], entry[2]
+        end
+        if lbl and cmd then
+          table.insert(entries, { label = lbl, command = cmd })
+        end
+      end
+    end
+    if #entries > 0 then return entries end
+  end
+  return { { label = "opencode", command = "opencode" } }
 end
 
 return M
