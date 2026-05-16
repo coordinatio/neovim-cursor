@@ -466,7 +466,7 @@ local function create_terminal_instance(id, config, command, display_mode)
   end
 
   if term_keys.select and term_keys.select ~= "" then
-    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.select, '<C-\\><C-n>:lua require("yapt").select_terminal_handler()<CR>', {
+    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.select, '<C-\\><C-n>:lua require("yapt").select_terminal_from_terminal_handler()<CR>', {
       noremap = true,
       silent = true,
       desc = "Select terminal"

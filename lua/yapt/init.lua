@@ -161,14 +161,21 @@ function M.hide_from_terminal_handler()
 end
 
 -- From within a terminal: hide whatever mode it's in, then run the new-terminal flow.
+-- Preserves the current display mode (fullscreen or split) for the new terminal.
 function M.new_terminal_from_terminal_handler()
-  if terminal.is_fullscreen_active() then
+  local display_mode = terminal.is_fullscreen_active() and "fullscreen" or "split"
+
+  if display_mode == "fullscreen" then
     terminal.hide_fullscreen()
   else
     terminal.hide()
   end
 
-  vim.schedule(M.new_terminal_handler)
+  vim.schedule(function()
+    picker.pick_command(config, function(cmd)
+      tabs.create_terminal(nil, config, cmd, display_mode)
+    end)
+  end)
 end
 
 -- From within a terminal: hide whatever mode it's in, then open the latest prompt buffer.
@@ -207,6 +214,18 @@ function M.select_terminal_handler()
   picker.pick_terminal(config, function(selected_id)
     if selected_id then
       tabs.switch_to(selected_id, config)
+    end
+  end)
+end
+
+-- From within a terminal: capture the current display mode before the picker
+-- opens, then switch to the selected terminal in the same mode.
+function M.select_terminal_from_terminal_handler()
+  local display_mode = terminal.is_fullscreen_active() and "fullscreen" or "split"
+
+  picker.pick_terminal(config, function(selected_id)
+    if selected_id then
+      tabs.switch_to(selected_id, config, display_mode)
     end
   end)
 end

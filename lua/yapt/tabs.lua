@@ -114,16 +114,16 @@ end
 
 -- Switch to a specific terminal.
 --
--- The target's display mode follows the *current* presentation mode:
--- if the user is currently in fullscreen, the new terminal also goes
--- fullscreen; otherwise it goes to split.
-function M.switch_to(id, config)
+-- The target's display mode is determined by `override_mode` if provided;
+-- otherwise it follows the *current* presentation mode (fullscreen if a
+-- fullscreen terminal is active, split otherwise).
+function M.switch_to(id, config, override_mode)
   if not state.terminals[id] then
     vim.notify("Terminal " .. id .. " does not exist", vim.log.levels.ERROR)
     return false
   end
 
-  local target_mode = terminal.is_fullscreen_active() and "fullscreen" or "split"
+  local target_mode = override_mode or (terminal.is_fullscreen_active() and "fullscreen" or "split")
 
   if target_mode == "fullscreen" then
     terminal.hide_fullscreen()
