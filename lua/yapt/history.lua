@@ -125,7 +125,13 @@ local function close_sent_prompt_buffer_if_needed(buf, config)
     return
   end
 
-  local replacement = util.find_file_buffer(buf) or util.find_empty_unnamed_buffer(buf)
+  local skip_prompt = function(b)
+    return is_plugin_prompt_file_buffer(b, config)
+  end
+
+  local replacement = util.find_previous_buffer(buf, skip_prompt)
+    or util.find_file_buffer(buf, skip_prompt)
+    or util.find_empty_unnamed_buffer(buf)
 
   if not replacement then
     return
@@ -145,7 +151,11 @@ local function prepare_prompt_buffer_for_fullscreen(buf, config)
     return
   end
 
-  local replacement = util.find_or_create_restore_buffer(buf)
+  local skip_prompt = function(b)
+    return is_plugin_prompt_file_buffer(b, config)
+  end
+
+  local replacement = util.find_or_create_restore_buffer(buf, skip_prompt)
   replace_prompt_in_open_windows(buf, replacement)
 end
 
