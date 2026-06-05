@@ -191,8 +191,8 @@ local function current_buffer_text(buf)
 end
 
 -- Send buffered text to whichever terminal is currently active and report success.
-local function send_to_active_terminal(text, source_buf, config, success_message)
-  local active_id = tabs.get_active()
+local function send_to_active_terminal(text, source_buf, config, success_message, target_id)
+  local active_id = target_id or tabs.get_active()
   if not active_id or not terminal.is_running(active_id) then
     return
   end
@@ -267,7 +267,7 @@ function M.send_prompt_file_to_terminal(config)
   end
 
   vim.defer_fn(function()
-    send_to_active_terminal(text_to_send, source_buf, config)
+    send_to_active_terminal(text_to_send, source_buf, config, nil, last_id)
   end, 100)
 end
 
@@ -309,7 +309,7 @@ function M.send_prompt_file_to_terminal_fullscreen(config)
   end
 
   vim.defer_fn(function()
-    send_to_active_terminal(text_to_send, source_buf, config)
+    send_to_active_terminal(text_to_send, source_buf, config, nil, last_id)
   end, 100)
 end
 
