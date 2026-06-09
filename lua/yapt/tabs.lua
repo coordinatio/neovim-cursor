@@ -102,7 +102,7 @@ function M.list_terminals()
   end
 
   table.sort(list, function(a, b)
-    return a.created_at > b.created_at
+    return a.last_active > b.last_active
   end)
 
   return list
@@ -124,6 +124,16 @@ function M.switch_to(id, config, override_mode)
   end
 
   local target_mode = override_mode or (terminal.is_fullscreen_active() and "fullscreen" or "split")
+
+  local term = terminal._get_terminal(id)
+  local is_currently_visible = term and term.win and vim.api.nvim_win_is_valid(term.win)
+
+  if id == state.active_id and is_currently_visible then
+    state.terminals[id].last_active = os.time()
+    vim.api.nvim_set_current_win(term.win)
+    vim.schedule(function() vim.cmd("startinsert") end)
+    return true
+  end
 
   if target_mode == "fullscreen" then
     terminal.hide_fullscreen()
