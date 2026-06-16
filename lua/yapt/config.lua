@@ -58,6 +58,7 @@ M.defaults = {
     select = "<F6>",     -- Select terminal
     prompt_last = "<F12>", -- Open or switch to last prompt buffer
     passthrough = "<leader>i", -- Send next key (or enter passthrough mode) to TUI app
+    forward_keys = {"<C-M-u>", "<C-M-d>"}, -- Keys forwarded to TUI in normal mode
   },
 }
 

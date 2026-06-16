@@ -68,6 +68,8 @@ local special_key_defs = {
   {"<C-Left>",   "\x1b[1;5D"},
   {"<S-Tab>",    "\x1b[Z"},
   {"<Space>",    " "},
+  {"<C-M-u>",    "\x1b\x15"},
+  {"<C-M-d>",    "\x1b\x04"},
 }
 
 local special_key_map = nil
@@ -172,6 +174,11 @@ function M.send_passthrough_key()
   local ok, key = pcall(vim.fn.getcharstr)
   if not ok or key == "" then return end
   do_send_key(key)
+end
+
+function M.send_mapped_key(key_notation)
+  local nvim_key = vim.api.nvim_replace_termcodes(key_notation, true, false, true)
+  do_send_key(nvim_key)
 end
 
 function M.is_passthrough_active()
@@ -425,6 +432,9 @@ local function create_terminal_instance(id, config, command, display_mode)
   })
 
   local term_keys = vim.tbl_deep_extend("force", {}, config_module.defaults.terminal_keybindings, config.terminal_keybindings or {})
+  if config.terminal_keybindings and config.terminal_keybindings.forward_keys then
+    term_keys.forward_keys = config.terminal_keybindings.forward_keys
+  end
 
   -- Backward compatibility: if someone only set `exit`, treat it as `hide`.
   if (term_keys.hide == nil or term_keys.hide == "") and term_keys.exit and term_keys.exit ~= "" then
@@ -514,6 +524,18 @@ local function create_terminal_instance(id, config, command, display_mode)
       silent = true,
       desc = "Enter passthrough mode (all keys to TUI, Esc to exit)"
     })
+  end
+
+  if term_keys.forward_keys then
+    for _, key in ipairs(term_keys.forward_keys) do
+      local rhs = string.format(
+        '<Cmd>lua require("yapt.terminal").send_mapped_key(%q)<CR>', key)
+      vim.api.nvim_buf_set_keymap(term.buf, 'n', key, rhs, {
+        noremap = true,
+        silent = true,
+        desc = "Forward " .. key .. " to TUI"
+      })
+    end
   end
 
   vim.schedule(function() vim.cmd("startinsert") end)
