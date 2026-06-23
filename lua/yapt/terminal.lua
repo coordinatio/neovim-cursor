@@ -25,8 +25,8 @@ local active_id = nil  -- Currently active terminal ID
 local default_id = "default"  -- Default terminal ID for backward compatibility
 local cleanup_callbacks = {}  -- Callbacks called when a terminal exits (used by tabs.lua)
 
-local passthrough_active = false
-local passthrough_ns = vim.api.nvim_create_namespace("yapt-passthrough")
+local forward_seqs = {}
+local forward_seq_counter = 0
 
 local special_key_defs = {
   {"<Up>",       "\x1b[A"},
@@ -176,43 +176,12 @@ function M.send_passthrough_key()
   do_send_key(key)
 end
 
-function M.send_mapped_key(key_notation)
-  local nvim_key = vim.api.nvim_replace_termcodes(key_notation, true, false, true)
-  do_send_key(nvim_key)
-end
-
-function M.is_passthrough_active()
-  return passthrough_active
-end
-
-function M.exit_passthrough_mode()
-  if not passthrough_active then return end
-  passthrough_active = false
-  vim.on_key(nil, passthrough_ns)
-  vim.api.nvim_echo({{"", "Normal"}}, false, {})
-end
-
-function M.enter_passthrough_mode()
-  if passthrough_active then return end
-  if not get_job_id_for_current_buf() then
-    vim.notify("Not in a terminal buffer", vim.log.levels.WARN)
-    return
-  end
-  passthrough_active = true
-  vim.api.nvim_echo({{"-- PASS THROUGH (Esc to exit) --", "WarningMsg"}}, false, {})
-  local esc_internal = vim.api.nvim_replace_termcodes("<Esc>", true, false, true)
-  vim.on_key(function(key)
-    if not passthrough_active then return end
-    if key == esc_internal then
-      M.exit_passthrough_mode()
-      return ""
-    end
-    if not do_send_key(key) then
-      M.exit_passthrough_mode()
-      return
-    end
-    return ""
-  end, passthrough_ns)
+function M.send_forward_key(id)
+  local seq = forward_seqs[id]
+  if not seq then return end
+  local job_id = get_job_id_for_current_buf()
+  if not job_id then return end
+  vim.api.nvim_chan_send(job_id, seq)
 end
 
 -- Verify the fullscreen window still actually shows the tracked terminal.
@@ -403,6 +372,13 @@ local function create_terminal_instance(id, config, command, display_mode)
       term.buf = nil
       term.win = nil
 
+      if term.forward_ids then
+        for _, fwd_id in ipairs(term.forward_ids) do
+          forward_seqs[fwd_id] = nil
+        end
+        term.forward_ids = nil
+      end
+
       terminals[id] = nil
 
       if active_id == id then
@@ -511,30 +487,33 @@ local function create_terminal_instance(id, config, command, display_mode)
       silent = true,
       desc = "Send next key to TUI application"
     })
-    local base = term_keys.passthrough:match("^<leader>(.+)$")
-    local double_key
-    if base then
-      double_key = "<leader>" .. base .. base
-    else
-      double_key = term_keys.passthrough .. term_keys.passthrough
-    end
-    local mode_rhs = '<Cmd>lua require("yapt.terminal").enter_passthrough_mode()<CR>'
-    vim.api.nvim_buf_set_keymap(term.buf, 'n', double_key, mode_rhs, {
-      noremap = true,
-      silent = true,
-      desc = "Enter passthrough mode (all keys to TUI, Esc to exit)"
-    })
   end
 
   if term_keys.forward_keys then
+    term.forward_ids = {}
     for _, key in ipairs(term_keys.forward_keys) do
+      forward_seq_counter = forward_seq_counter + 1
+      local fwd_id = forward_seq_counter
+      term.forward_ids[#term.forward_ids + 1] = fwd_id
+      local nvim_key = vim.api.nvim_replace_termcodes(key, true, false, true)
+      forward_seqs[fwd_id] = neovim_key_to_termseq(nvim_key)
       local rhs = string.format(
-        '<Cmd>lua require("yapt.terminal").send_mapped_key(%q)<CR>', key)
+        '<Cmd>lua require("yapt.terminal").send_forward_key(%d)<CR>', fwd_id)
       vim.api.nvim_buf_set_keymap(term.buf, 'n', key, rhs, {
         noremap = true,
         silent = true,
         desc = "Forward " .. key .. " to TUI"
       })
+      local neovide_key = key:gsub("^<C%-M%-(%l)>$", function(c)
+        return "<M-C-" .. c:upper() .. ">"
+      end)
+      if neovide_key ~= key then
+        vim.api.nvim_buf_set_keymap(term.buf, 'n', neovide_key, rhs, {
+          noremap = true,
+          silent = true,
+          desc = "Forward " .. neovide_key .. " to TUI"
+        })
+      end
     end
   end
 

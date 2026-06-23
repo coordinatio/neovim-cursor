@@ -103,7 +103,6 @@ Work with multiple terminal sessions for different tasks:
 | `<leader>al` | Open or switch to last prompt file from history |
 | `<leader>ac` | Copy `@file` link to clipboard (paste into CLI prompt) |
 | `<leader>i` | Send next key directly to TUI app in terminal |
-| `<leader>ii` | Toggle continuous passthrough mode (all keys go to TUI, Esc to exit) |
 
 #### From Visual Mode
 
@@ -124,21 +123,15 @@ When inside a terminal, manage sessions without leaving:
 | `<F2>` | Rename current terminal |
 | `<F12>` | Open or switch to last prompt file from history |
 | `<leader>i` | Send next key directly to TUI app in terminal |
-| `<leader>ii` | Toggle continuous passthrough mode (all keys go to TUI, Esc to exit) |
 
-### Passthrough Mode
+### Passthrough
 
-When a TUI application (e.g. a text editor, file manager, or pager) runs inside the terminal, Neovim's normal-mode keybindings intercept keys. Passthrough mode lets you send keys directly to the TUI app.
+When a TUI application (e.g. a text editor, file manager, or pager) runs inside the terminal, Neovim's normal-mode keybindings intercept keys. The passthrough key lets you send keys directly to the TUI app.
 
 **Single-key passthrough** (`<leader>i` by default):
 1. Navigate to the terminal window in normal mode
 2. Press `<leader>i`, then press any key — it is sent directly to the TUI
 3. You return to normal mode immediately
-
-**Continuous passthrough mode** (double the passthrough key — `<leader>ii` by default):
-1. Press `<leader>ii` to enter passthrough mode — all keys forward to the TUI
-2. The status line shows `-- PASS THROUGH (Esc to exit) --`
-3. Press `Esc` to exit passthrough mode
 
 ### Prompt History Workflow
 
