@@ -145,6 +145,7 @@ Create a markdown file for your CLI task and send it in one go:
    - Saves the buffer if modified
    - Shows/creates the terminal and sends the current buffer contents directly
    - If current buffer is a prompt file created by `<leader>ah`, it is closed after successful send
+   - If current buffer is an unnamed/new file (e.g. a fresh `:enew` buffer) with content, a prompt-history file is created automatically (timestamped, in `.nvim-yapt/history/`), the content is saved into it, and it is then treated like a prompt file — closed after a successful send. An empty unnamed buffer aborts with a warning instead.
    - If no file buffers remain, opens an empty buffer
 
 **Additional history actions:**
@@ -437,6 +438,11 @@ Without Telescope, the picker falls back to `vim.ui.select`. The history command
 
 - Ensure you're pressing the toggle key while still in visual mode
 - The selection is sent after the terminal opens/shows
+
+### "Current buffer is empty — nothing to send"
+
+- Shown when running `:PTSend` / `<leader>ae` on an unnamed buffer with no content. Type something first, or send from a saved file.
+- Unnamed buffers *with* content no longer need to be saved manually — a history file is created for them automatically.
 
 ---
 

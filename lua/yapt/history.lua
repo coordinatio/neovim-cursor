@@ -22,9 +22,12 @@ local function history_dir_path(cfg)
 end
 
 -- Parse timestamp from filename like: 2025-02-04_14-30-45.md
+-- Also accepts a collision suffix (2025-02-04_14-30-45_1.md) so that
+-- auto-created files from same-second sends are still recognized as
+-- prompt-file buffers (and thus closed after send).
 -- @return number|nil unix timestamp (seconds) if parseable
 local function parse_timestamp_from_filename(filename)
-  local y, mo, d, h, mi, s = filename:match("^(%d%d%d%d)%-(%d%d)%-(%d%d)_(%d%d)%-(%d%d)%-(%d%d)%.md$")
+  local y, mo, d, h, mi, s = filename:match("^(%d%d%d%d)%-(%d%d)%-(%d%d)_(%d%d)%-(%d%d)%-(%d%d)(_?%d*)%.md$")
   if not y then
     return nil
   end
@@ -164,9 +167,51 @@ function M.history_dir_path(config)
   return history_dir_path(config)
 end
 
--- Human-readable timestamp for filename: 2025-02-04_14-30-45
-local function timestamp_filename()
-  return os.date("%Y-%m-%d_%H-%M-%S") .. ".md"
+-- Build a unique timestamped history file path (.md), guarding against
+-- same-second collisions by appending _1, _2, ... before the extension.
+-- Collision-suffixed names still parse via parse_timestamp_from_filename.
+local function unique_history_path(dir)
+  local base = os.date("%Y-%m-%d_%H-%M-%S")
+  local fullpath = dir .. "/" .. base .. ".md"
+  local counter = 1
+  while vim.fn.filereadable(fullpath) == 1 do
+    fullpath = dir .. "/" .. base .. "_" .. counter .. ".md"
+    counter = counter + 1
+  end
+  return fullpath
+end
+
+-- Persist an unnamed/new buffer to a fresh prompt-history file, converting
+-- the buffer in place so it becomes a recognized plugin prompt-file buffer.
+-- Reuses the same naming scheme (timestamped .md) as create_prompt_file.
+-- @param lines string[] buffer lines to write (computed once by the caller)
+-- @return string|nil full path of the created file, or nil on failure
+local function persist_unnamed_buffer_to_history(buf, lines, config)
+  local dir = history_dir_path(config)
+  vim.fn.mkdir(dir, "p")
+  if vim.fn.isdirectory(dir) ~= 1 then
+    vim.notify("Failed to create history directory: " .. dir, vim.log.levels.ERROR)
+    return nil
+  end
+
+  local fullpath = unique_history_path(dir)
+
+  local wrote = pcall(vim.fn.writefile, lines, fullpath)
+  if not wrote or vim.fn.filereadable(fullpath) ~= 1 then
+    vim.notify("Failed to write history file: " .. fullpath, vim.log.levels.ERROR)
+    return nil
+  end
+
+  -- Convert the buffer in place: it now IS the history prompt file, so it
+  -- satisfies is_plugin_prompt_file_buffer and inherits close-after-send.
+  local renamed, err = pcall(vim.api.nvim_buf_set_name, buf, fullpath)
+  if not renamed then
+    vim.notify("Failed to associate buffer with history file: " .. tostring(err), vim.log.levels.ERROR)
+    return nil
+  end
+  vim.bo[buf].modified = false
+
+  return fullpath
 end
 
 -- Create a new prompt file in history dir and open it in the current window
@@ -175,8 +220,7 @@ function M.create_prompt_file(config)
   config = config or {}
   local dir = history_dir_path(config)
   vim.fn.mkdir(dir, "p")
-  local filename = timestamp_filename()
-  local fullpath = dir .. "/" .. filename
+  local fullpath = unique_history_path(dir)
   vim.cmd("edit " .. vim.fn.fnameescape(fullpath))
   vim.notify("Created " .. fullpath, vim.log.levels.INFO)
 end
@@ -218,13 +262,32 @@ local function pick_create_and_send(config, text, source_buf, success_message, d
   end)
 end
 
-local function current_file_text_or_notify()
+local function current_file_text_or_notify(config)
   local buf = vim.api.nvim_get_current_buf()
-  local path = vim.api.nvim_buf_get_name(buf)
-  if path == nil or path == "" then
-    vim.notify("Current buffer has no file path (save the file first)", vim.log.levels.WARN)
+
+  if vim.bo[buf].buftype ~= "" then
+    vim.notify("Current buffer is not a normal file buffer", vim.log.levels.WARN)
     return nil, nil
   end
+
+  local path = vim.api.nvim_buf_get_name(buf)
+  if path == nil or path == "" then
+    -- Unnamed/new buffer: auto-create a history file and place the content
+    -- in it before sending (only if there is something to send).
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    if vim.trim(table.concat(lines, "\n")) == "" then
+      vim.notify("Current buffer is empty — nothing to send", vim.log.levels.WARN)
+      return nil, nil
+    end
+    local new_path = persist_unnamed_buffer_to_history(buf, lines, config)
+    if not new_path then
+      return nil, nil
+    end
+    vim.notify("Saved new buffer as " .. new_path, vim.log.levels.INFO)
+    -- Buffer is now the (unmodified) history file; send the content we read.
+    return buf, table.concat(lines, "\n") .. "\n"
+  end
+
   if vim.bo[buf].modified then
     vim.api.nvim_buf_call(buf, function()
       vim.cmd("write")
@@ -239,7 +302,7 @@ end
 -- Saves the current buffer if modified so the file exists on disk for the CLI.
 -- @param config Plugin config (for terminal/tabs)
 function M.send_prompt_file_to_terminal(config)
-  local source_buf, text_to_send = current_file_text_or_notify()
+  local source_buf, text_to_send = current_file_text_or_notify(config)
   if not source_buf then
     return
   end
@@ -277,7 +340,7 @@ end
 -- Saves the current buffer if modified so the file exists on disk for the CLI.
 -- @param config Plugin config (for terminal/tabs)
 function M.send_prompt_file_to_terminal_fullscreen(config)
-  local source_buf, text_to_send = current_file_text_or_notify()
+  local source_buf, text_to_send = current_file_text_or_notify(config)
   if not source_buf then
     return
   end
@@ -316,7 +379,7 @@ end
 -- Deprecated compatibility shim. Creates a fresh split terminal, then sends the
 -- current file contents to it.
 function M.send_prompt_file_to_new_terminal(config)
-  local source_buf, text_to_send = current_file_text_or_notify()
+  local source_buf, text_to_send = current_file_text_or_notify(config)
   if not source_buf then
     return
   end
