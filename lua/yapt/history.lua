@@ -115,6 +115,66 @@ local function is_plugin_prompt_file_buffer(buf, config)
   return parse_timestamp_from_filename(filename) ~= nil
 end
 
+-- Persist a prompt-file buffer to disk when the user leaves it, so it shows
+-- up in the history Telescope picker (:PTHistory) and :PTLast without a
+-- manual :write. No-op unless the buffer is a plugin prompt file and has
+-- unsaved changes; an empty just-created prompt you abandon is left alone.
+local function autosave_prompt_buffer(buf, config)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+  if not is_plugin_prompt_file_buffer(buf, config) then
+    return
+  end
+  if not vim.bo[buf].modified then
+    return
+  end
+
+  local path = vim.api.nvim_buf_get_name(buf)
+  if not path or path == "" then
+    return
+  end
+
+  local dir = history_dir_path(config)
+  if vim.fn.isdirectory(dir) ~= 1 then
+    vim.fn.mkdir(dir, "p")
+  end
+
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local ok = pcall(vim.fn.writefile, lines, path)
+  if ok then
+    vim.bo[buf].modified = false
+  else
+    vim.notify("Failed to autosave prompt file: " .. path, vim.log.levels.WARN)
+  end
+end
+
+-- Register autocmds that persist prompt-file buffers to disk when the user
+-- leaves them (or quits Neovim), so they appear in the history Telescope
+-- picker without a manual :write. Idempotent: recreates the augroup on each
+-- call.
+function M.setup_autosave_autocmds(config)
+  local group = vim.api.nvim_create_augroup("yapt_history_autosave", { clear = true })
+  vim.api.nvim_create_autocmd({ "BufLeave", "BufHidden" }, {
+    group = group,
+    callback = function(args)
+      autosave_prompt_buffer(args.buf, config)
+    end,
+  })
+  -- Quitting Neovim fires no per-buffer leave event for the current buffer,
+  -- so sweep every loaded prompt buffer on exit to avoid losing changes.
+  vim.api.nvim_create_autocmd("VimLeavePre", {
+    group = group,
+    callback = function()
+      for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+        if vim.api.nvim_buf_is_loaded(buf) then
+          autosave_prompt_buffer(buf, config)
+        end
+      end
+    end,
+  })
+end
+
 local function replace_prompt_in_open_windows(buf, replacement)
   for _, win in ipairs(vim.api.nvim_list_wins()) do
     if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == buf then

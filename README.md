@@ -148,6 +148,8 @@ Create a markdown file for your CLI task and send it in one go:
    - If current buffer is an unnamed/new file (e.g. a fresh `:enew` buffer) with content, a prompt-history file is created automatically (timestamped, in `.nvim-yapt/history/`), the content is saved into it, and it is then treated like a prompt file — closed after a successful send. An empty unnamed buffer aborts with a warning instead.
    - If no file buffers remain, opens an empty buffer
 
+Prompt-file buffers are automatically saved to disk when you leave them (switch buffer, close window, open the picker, etc.), so they appear in `:PTHistory` and `:PTLast` without a manual `:write`. Disable with `history.autosave = false`.
+
 **Additional history actions:**
 
 - **Browse history in Telescope**: `:PTHistory` or `<leader>aH`
@@ -214,6 +216,7 @@ require("yapt").setup({
 
   history = {
     dir = ".nvim-yapt/history",  -- Relative to CWD
+    autosave = true,           -- Save prompt-file buffers to disk when left
   },
 
   terminal = {

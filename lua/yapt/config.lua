@@ -24,6 +24,7 @@ M.defaults = {
   -- Prompt history (md files for terminal tasks)
   history = {
     dir = ".nvim-yapt/history",  -- Relative to CWD
+    autosave = true,           -- Save prompt-file buffers to disk when left
   },
 
   -- Terminal naming configuration

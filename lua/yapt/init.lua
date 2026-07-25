@@ -357,6 +357,13 @@ end
 function M.setup(user_config)
   config = config_module.setup(user_config)
 
+  -- Auto-save prompt-file buffers to disk when leaving them so they appear
+  -- in the history Telescope picker (:PTHistory) and :PTLast without a
+  -- manual :write. Disable with history.autosave = false.
+  if config.history and config.history.autosave ~= false then
+    history.setup_autosave_autocmds(config)
+  end
+
   local keybindings = config.keybindings
 
   -- Toggle (split)
