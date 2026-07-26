@@ -4,6 +4,19 @@
 -- discovery for "what should I show after I stole this window?" logic).
 local M = {}
 
+-- Default title shown in the notification header (e.g. nvim-notify).
+local DEFAULT_TITLE = "yapt"
+
+-- Thin wrapper around `vim.notify` that injects a default `title` so the
+-- plugin name appears in the notification header (nvim-notify). Any extra
+-- opts (e.g. `id`, `timeout`) are merged on top of the defaults, and the
+-- caller's table is not mutated. Pass `opts.title = ""` to force an empty
+-- title.
+function M.notify(msg, level, opts)
+  local merged = vim.tbl_extend("force", { title = DEFAULT_TITLE }, opts or {})
+  return vim.notify(msg, level, merged)
+end
+
 -- True for buffers that look like normal user-facing buffers
 -- (listed, valid, and a regular file/empty buftype).
 local function is_normal_listed_buffer(buf, exclude_buf)

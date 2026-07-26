@@ -1,6 +1,8 @@
 -- Default configuration for yapt.nvim plugin
 local M = {}
 
+local util = require("yapt.util")
+
 M.defaults = {
   -- Keybinding for toggling terminal (backward compatibility)
   keybinding = "<A-`>",
@@ -71,7 +73,7 @@ local function warn_once(key, message)
   if warned_keys[key] then return end
   warned_keys[key] = true
   vim.schedule(function()
-    vim.notify(message, vim.log.levels.WARN)
+    util.notify(message, vim.log.levels.WARN)
   end)
 end
 
@@ -95,13 +97,13 @@ local function migrate_history_dir(target_dir)
       vim.fn.mkdir(parent, "p")
       local ok = vim.fn.rename(legacy_path, target_path)
       if ok == 0 then
-        vim.notify(
-          "[yapt] Migrated prompt history from " .. legacy .. " to " .. target_dir,
+        util.notify(
+          "Migrated prompt history from " .. legacy .. " to " .. target_dir,
           vim.log.levels.INFO
         )
       else
-        vim.notify(
-          "[yapt] Failed to migrate " .. legacy .. " to " .. target_dir,
+        util.notify(
+          "Failed to migrate " .. legacy .. " to " .. target_dir,
           vim.log.levels.WARN
         )
       end
@@ -117,7 +119,7 @@ local function check_deprecated_options(user_config)
 
   if user_config.keybindings.prompt_send_new ~= nil then
     warn_once("prompt_send_new",
-      "[yapt] `keybindings.prompt_send_new` is deprecated but still supported. " ..
+      "`keybindings.prompt_send_new` is deprecated but still supported. " ..
       "The default <leader>aE slot is now used by `keybindings.prompt_send_fullscreen`; " ..
       "create a new terminal first, then use `keybindings.prompt_send` (or `keybindings.prompt_send_fullscreen`)."
     )

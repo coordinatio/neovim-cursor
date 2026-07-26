@@ -21,6 +21,7 @@ local terminal = require("yapt.terminal")
 local tabs = require("yapt.tabs")
 local picker = require("yapt.picker")
 local history = require("yapt.history")
+local util = require("yapt.util")
 
 local M = {}
 local config = {}
@@ -234,7 +235,7 @@ function M.rename_terminal_handler()
   local active_id = tabs.get_active()
 
   if not active_id then
-    vim.notify("No active terminal to rename. Create one with <leader>an", vim.log.levels.WARN)
+    util.notify("No active terminal to rename. Create one with <leader>an", vim.log.levels.WARN)
     return
   end
 
@@ -250,12 +251,12 @@ function M.rename_terminal_handler()
   }, function(input)
     if input and input ~= "" then
       if tabs.rename_terminal(active_id, input) then
-        vim.notify("Terminal renamed to: " .. input, vim.log.levels.INFO)
+        util.notify("Terminal renamed to: " .. input, vim.log.levels.INFO)
         if is_terminal_buf then
           vim.schedule(function() vim.cmd("startinsert") end)
         end
       else
-        vim.notify("Failed to rename terminal", vim.log.levels.ERROR)
+        util.notify("Failed to rename terminal", vim.log.levels.ERROR)
       end
     elseif is_terminal_buf then
       vim.schedule(function() vim.cmd("startinsert") end)
@@ -267,7 +268,7 @@ function M.list_terminals_handler()
   local terminals = tabs.list_terminals()
 
   if #terminals == 0 then
-    vim.notify("No terminals available. Create one with <leader>an", vim.log.levels.INFO)
+    util.notify("No terminals available. Create one with <leader>an", vim.log.levels.INFO)
     return
   end
 
@@ -295,7 +296,7 @@ function M.list_terminals_handler()
   table.insert(lines, "")
   table.insert(lines, string.format("Total: %d terminal(s)", #terminals))
 
-  vim.notify(table.concat(lines, "\n"), vim.log.levels.INFO)
+  util.notify(table.concat(lines, "\n"), vim.log.levels.INFO)
 end
 
 ------------------------------------------------------------
@@ -304,22 +305,22 @@ end
 
 local function copy_range_link_to_clipboard(filepath, start_line, end_line)
   if not filepath or filepath == "" then
-    vim.notify("No file path (buffer not saved?)", vim.log.levels.WARN)
+    util.notify("No file path (buffer not saved?)", vim.log.levels.WARN)
     return
   end
   local link = "@" .. filepath .. ":" .. start_line .. "-" .. end_line
   vim.fn.setreg('"', link)
-  vim.notify("Copied to buffer: " .. link, vim.log.levels.INFO)
+  util.notify("Copied to buffer: " .. link, vim.log.levels.INFO)
 end
 
 local function copy_file_link_to_clipboard(filepath)
   if not filepath or filepath == "" then
-    vim.notify("No file path (buffer not saved?)", vim.log.levels.WARN)
+    util.notify("No file path (buffer not saved?)", vim.log.levels.WARN)
     return
   end
   local link = "@" .. filepath
   vim.fn.setreg('"', link)
-  vim.notify("Copied to buffer: " .. link, vim.log.levels.INFO)
+  util.notify("Copied to buffer: " .. link, vim.log.levels.INFO)
 end
 
 function M.copy_file_link_handler()
@@ -347,8 +348,8 @@ local function set_n(lhs, rhs, desc)
 end
 
 local function warn_deprecated_prompt_send_new()
-  vim.notify(
-    "[yapt] PTPromptSendNew / keybindings.prompt_send_new is deprecated. " ..
+  util.notify(
+    "PTPromptSendNew / keybindings.prompt_send_new is deprecated. " ..
     "Create a new terminal with PTNew, then use PTSend.",
     vim.log.levels.WARN
   )
@@ -467,13 +468,13 @@ function M.setup(user_config)
   vim.api.nvim_create_user_command("PTRename", function(opts)
     local active_id = tabs.get_active()
     if not active_id then
-      vim.notify("No active terminal to rename", vim.log.levels.WARN)
+      util.notify("No active terminal to rename", vim.log.levels.WARN)
       return
     end
 
     if opts.args and opts.args ~= "" then
       if tabs.rename_terminal(active_id, opts.args) then
-        vim.notify("Terminal renamed to: " .. opts.args, vim.log.levels.INFO)
+        util.notify("Terminal renamed to: " .. opts.args, vim.log.levels.INFO)
       end
     else
       M.rename_terminal_handler()
@@ -529,7 +530,7 @@ function M.setup(user_config)
     if active_id and terminal.is_running(active_id) then
       terminal.send_text(opts.args, active_id)
     else
-      vim.notify("Terminal is not running", vim.log.levels.WARN)
+      util.notify("Terminal is not running", vim.log.levels.WARN)
     end
   end, {
     desc = "Send text to YAPT terminal",
@@ -537,7 +538,7 @@ function M.setup(user_config)
   })
 
   vim.api.nvim_create_user_command("PTVersion", function()
-    vim.notify("yapt.nvim v" .. M.version, vim.log.levels.INFO)
+    util.notify("yapt.nvim v" .. M.version, vim.log.levels.INFO)
   end, { desc = "Display yapt.nvim plugin version" })
 end
 

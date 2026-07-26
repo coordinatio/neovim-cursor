@@ -145,7 +145,7 @@ local function autosave_prompt_buffer(buf, config)
   if ok then
     vim.bo[buf].modified = false
   else
-    vim.notify("Failed to autosave prompt file: " .. path, vim.log.levels.WARN)
+    util.notify("Failed to autosave prompt file: " .. path, vim.log.levels.WARN)
   end
 end
 
@@ -204,7 +204,7 @@ local function close_sent_prompt_buffer_if_needed(buf, config)
 
   local ok, err = pcall(vim.api.nvim_buf_delete, buf, {})
   if not ok then
-    vim.notify("Failed to close sent prompt buffer: " .. tostring(err), vim.log.levels.WARN)
+    util.notify("Failed to close sent prompt buffer: " .. tostring(err), vim.log.levels.WARN)
     return
   end
 end
@@ -250,7 +250,7 @@ local function persist_unnamed_buffer_to_history(buf, lines, config)
   local dir = history_dir_path(config)
   vim.fn.mkdir(dir, "p")
   if vim.fn.isdirectory(dir) ~= 1 then
-    vim.notify("Failed to create history directory: " .. dir, vim.log.levels.ERROR)
+    util.notify("Failed to create history directory: " .. dir, vim.log.levels.ERROR)
     return nil
   end
 
@@ -258,7 +258,7 @@ local function persist_unnamed_buffer_to_history(buf, lines, config)
 
   local wrote = pcall(vim.fn.writefile, lines, fullpath)
   if not wrote or vim.fn.filereadable(fullpath) ~= 1 then
-    vim.notify("Failed to write history file: " .. fullpath, vim.log.levels.ERROR)
+    util.notify("Failed to write history file: " .. fullpath, vim.log.levels.ERROR)
     return nil
   end
 
@@ -266,7 +266,7 @@ local function persist_unnamed_buffer_to_history(buf, lines, config)
   -- satisfies is_plugin_prompt_file_buffer and inherits close-after-send.
   local renamed, err = pcall(vim.api.nvim_buf_set_name, buf, fullpath)
   if not renamed then
-    vim.notify("Failed to associate buffer with history file: " .. tostring(err), vim.log.levels.ERROR)
+    util.notify("Failed to associate buffer with history file: " .. tostring(err), vim.log.levels.ERROR)
     return nil
   end
   vim.bo[buf].modified = false
@@ -282,7 +282,7 @@ function M.create_prompt_file(config)
   vim.fn.mkdir(dir, "p")
   local fullpath = unique_history_path(dir)
   vim.cmd("edit " .. vim.fn.fnameescape(fullpath))
-  vim.notify("Created " .. fullpath, vim.log.levels.INFO)
+  util.notify("Created " .. fullpath, vim.log.levels.INFO)
 end
 
 local function current_buffer_text(buf)
@@ -302,7 +302,7 @@ local function send_to_active_terminal(text, source_buf, config, success_message
   end
   local sent = terminal.send_text(text, active_id)
   if sent then
-    vim.notify(success_message or "Sent current file contents to terminal", vim.log.levels.INFO)
+    util.notify(success_message or "Sent current file contents to terminal", vim.log.levels.INFO)
     close_sent_prompt_buffer_if_needed(source_buf, config)
   end
 end
@@ -326,7 +326,7 @@ local function current_file_text_or_notify(config)
   local buf = vim.api.nvim_get_current_buf()
 
   if vim.bo[buf].buftype ~= "" then
-    vim.notify("Current buffer is not a normal file buffer", vim.log.levels.WARN)
+    util.notify("Current buffer is not a normal file buffer", vim.log.levels.WARN)
     return nil, nil
   end
 
@@ -336,14 +336,14 @@ local function current_file_text_or_notify(config)
     -- in it before sending (only if there is something to send).
     local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
     if vim.trim(table.concat(lines, "\n")) == "" then
-      vim.notify("Current buffer is empty — nothing to send", vim.log.levels.WARN)
+      util.notify("Current buffer is empty — nothing to send", vim.log.levels.WARN)
       return nil, nil
     end
     local new_path = persist_unnamed_buffer_to_history(buf, lines, config)
     if not new_path then
       return nil, nil
     end
-    vim.notify("Saved new buffer as " .. new_path, vim.log.levels.INFO)
+    util.notify("Saved new buffer as " .. new_path, vim.log.levels.INFO)
     -- Buffer is now the (unmodified) history file; send the content we read.
     return buf, table.concat(lines, "\n") .. "\n"
   end
@@ -476,7 +476,7 @@ end
 function M.open_history_in_telescope(config)
   local ok = pcall(require, "telescope")
   if not ok then
-    vim.notify("telescope.nvim is required for PTHistory", vim.log.levels.WARN)
+    util.notify("telescope.nvim is required for PTHistory", vim.log.levels.WARN)
     return
   end
 
@@ -577,7 +577,7 @@ end
 function M.open_last_prompt_buffer(config)
   local path = M.get_last_prompt_file(config)
   if not path then
-    vim.notify("No prompt files in history", vim.log.levels.WARN)
+    util.notify("No prompt files in history", vim.log.levels.WARN)
     return
   end
   local buf = vim.fn.bufadd(path)

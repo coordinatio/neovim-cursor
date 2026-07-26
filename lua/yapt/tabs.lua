@@ -13,6 +13,7 @@
 --
 local terminal = require("yapt.terminal")
 local config_module = require("yapt.config")
+local util = require("yapt.util")
 
 local M = {}
 
@@ -119,7 +120,7 @@ end
 -- fullscreen terminal is active, split otherwise).
 function M.switch_to(id, config, override_mode)
   if not state.terminals[id] then
-    vim.notify("Terminal " .. id .. " does not exist", vim.log.levels.ERROR)
+    util.notify("Terminal " .. id .. " does not exist", vim.log.levels.ERROR)
     return false
   end
 
@@ -199,7 +200,7 @@ function M.rename_terminal(id, new_name)
   end
 
   if not new_name or new_name == "" then
-    vim.notify("Terminal name cannot be empty", vim.log.levels.WARN)
+    util.notify("Terminal name cannot be empty", vim.log.levels.WARN)
     return false
   end
 

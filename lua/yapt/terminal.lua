@@ -168,7 +168,7 @@ end
 
 function M.send_passthrough_key()
   if not get_job_id_for_current_buf() then
-    vim.notify("Not in a terminal buffer", vim.log.levels.WARN)
+    util.notify("Not in a terminal buffer", vim.log.levels.WARN)
     return
   end
   local ok, key = pcall(vim.fn.getcharstr)
@@ -634,7 +634,7 @@ function M.send_text(text, id)
   id = id or active_id or default_id
 
   if not M.is_running(id) then
-    vim.notify("Terminal is not running", vim.log.levels.WARN)
+    util.notify("Terminal is not running", vim.log.levels.WARN)
     return false
   end
 

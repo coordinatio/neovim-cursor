@@ -15,6 +15,7 @@
 local tabs = require("yapt.tabs")
 local terminal = require("yapt.terminal")
 local config_module = require("yapt.config")
+local util = require("yapt.util")
 
 local M = {}
 
@@ -217,12 +218,12 @@ local function pick_with_telescope(terminals, config, callback)
             }, function(input)
               if input and input ~= "" then
                 if tabs.rename_terminal(selection.id, input) then
-                  vim.notify("Terminal renamed to: " .. input, vim.log.levels.INFO)
+                  util.notify("Terminal renamed to: " .. input, vim.log.levels.INFO)
                   vim.schedule(function()
                     M.pick_terminal(config, callback)
                   end)
                 else
-                  vim.notify("Failed to rename terminal", vim.log.levels.ERROR)
+                  util.notify("Failed to rename terminal", vim.log.levels.ERROR)
                 end
               end
             end)
@@ -244,12 +245,12 @@ local function pick_with_telescope(terminals, config, callback)
             }, function(input)
               if input and input ~= "" then
                 if tabs.rename_terminal(selection.id, input) then
-                  vim.notify("Terminal renamed to: " .. input, vim.log.levels.INFO)
+                  util.notify("Terminal renamed to: " .. input, vim.log.levels.INFO)
                   vim.schedule(function()
                     M.pick_terminal(config, callback)
                   end)
                 else
-                  vim.notify("Failed to rename terminal", vim.log.levels.ERROR)
+                  util.notify("Failed to rename terminal", vim.log.levels.ERROR)
                 end
               end
             end)
@@ -298,7 +299,7 @@ function M.pick_terminal(config, callback)
   local terminals = tabs.list_terminals()
 
   if #terminals == 0 then
-    vim.notify("No terminals available. Create one with <leader>an", vim.log.levels.WARN)
+    util.notify("No terminals available. Create one with <leader>an", vim.log.levels.WARN)
     return
   end
 
