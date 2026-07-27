@@ -140,11 +140,14 @@ local function autosave_prompt_buffer(buf, config)
     vim.fn.mkdir(dir, "p")
   end
 
-  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-  local ok = pcall(vim.fn.writefile, lines, path)
-  if ok then
-    vim.bo[buf].modified = false
-  else
+  -- Use :write (not writefile) so Neovim updates the buffer's file timestamp
+  -- and does not prompt to reload when returning to the buffer.
+  local ok = pcall(function()
+    vim.api.nvim_buf_call(buf, function()
+      vim.cmd("silent! noautocmd write")
+    end)
+  end)
+  if not ok then
     util.notify("Failed to autosave prompt file: " .. path, vim.log.levels.WARN)
   end
 end
