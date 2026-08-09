@@ -118,28 +118,59 @@ end
 -- The target's display mode is determined by `override_mode` if provided;
 -- otherwise it follows the *current* presentation mode (fullscreen if a
 -- fullscreen terminal is active, split otherwise).
-function M.switch_to(id, config, override_mode)
+--
+-- leave_ui_mode: optional "t"/"n" for the terminal being left. When set,
+-- persists that mode on hide() and on same-terminal refocus (so post-picker
+-- "n" from leave_terminal_job_mode does not clobber the invoking mode).
+-- leave_id: optional terminal to tear down / refocus as "current" when it
+-- differs from state.active_id (focused buffer captured before a modal UI).
+function M.switch_to(id, config, override_mode, leave_ui_mode, leave_id)
   if not state.terminals[id] then
     util.notify("Terminal " .. id .. " does not exist", vim.log.levels.ERROR)
     return false
   end
 
-  local target_mode = override_mode or (terminal.is_fullscreen_active() and "fullscreen" or "split")
+  local target_mode = override_mode
+    or (terminal.is_fullscreen_in_current_tab() and "fullscreen" or "split")
 
-  local term = terminal._get_terminal(id)
-  local is_currently_visible = term and term.win and vim.api.nvim_win_is_valid(term.win)
+  local leaving = leave_id or state.active_id
+  local is_currently_visible = terminal.is_visible(id)
 
-  if id == state.active_id and is_currently_visible then
+  if id == leaving and is_currently_visible then
+    state.active_id = id
+    state.last_id = id
     state.terminals[id].last_active = os.time()
-    vim.api.nvim_set_current_win(term.win)
-    vim.schedule(function() vim.cmd("startinsert") end)
+    terminal._set_active(id)
+    if leave_ui_mode == "t" or leave_ui_mode == "n" then
+      terminal.save_ui_state(id, leave_ui_mode)
+    end
+    -- Refocus only: do not winrestview, or live scrollback position is lost.
+    terminal.apply_ui_state(id, { restore_view = false })
     return true
   end
 
-  if target_mode == "fullscreen" then
+  -- Tear down the terminal we're leaving. Fullscreen must use hide_fullscreen
+  -- (restore saved buffer); never nvim_win_hide the taken-over editor window.
+  if leaving and leaving ~= id then
+    if terminal.is_fullscreen_active(leaving) then
+      terminal.hide_fullscreen(leave_ui_mode)
+    else
+      terminal.hide(leaving, leave_ui_mode)
+    end
+  end
+  -- Also drop a divergent active terminal so focus/active stay aligned.
+  if state.active_id and state.active_id ~= id and state.active_id ~= leaving then
+    if terminal.is_fullscreen_active(state.active_id) then
+      terminal.hide_fullscreen()
+    else
+      terminal.hide(state.active_id)
+    end
+  end
+  -- Target wants fullscreen: also release any remaining fullscreen surface
+  -- (e.g. target itself in another tab, or a third terminal left mounted).
+  -- No leave_ui_mode: that mode belongs to the terminal we left, not this one.
+  if target_mode == "fullscreen" and terminal.is_fullscreen_active() then
     terminal.hide_fullscreen()
-  elseif state.active_id and state.active_id ~= id then
-    terminal.hide(state.active_id)
   end
 
   state.active_id = id
@@ -150,10 +181,26 @@ function M.switch_to(id, config, override_mode)
 
   local cmd = state.terminals[id].command
   if terminal.is_running(id) then
+    -- show / show_fullscreen: never toggle (a visible target must not hide).
     if target_mode == "fullscreen" then
-      terminal.toggle_fullscreen(config, id, cmd)
+      local term = terminal._get_terminal(id)
+      if term and term.win and vim.api.nvim_win_is_valid(term.win) then
+        -- Drop existing split (or leftover win) before taking over a window.
+        -- Fullscreen for this id was already released above when applicable.
+        terminal.hide(id)
+        vim.schedule(function()
+          if terminal.is_running(id) then
+            terminal.show_fullscreen(id)
+            terminal.apply_ui_state(id)
+          end
+        end)
+      else
+        terminal.show_fullscreen(id)
+        terminal.apply_ui_state(id)
+      end
     else
-      terminal.toggle(config, id, cmd)
+      terminal.show(id, config)
+      terminal.apply_ui_state(id)
     end
   else
     terminal._create_terminal_instance(id, config, cmd, target_mode)

@@ -84,6 +84,19 @@ local function get_special_key_map()
   return special_key_map
 end
 
+local function id_for_buf(buf)
+  buf = buf or vim.api.nvim_get_current_buf()
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return nil
+  end
+  for id, term in pairs(terminals) do
+    if term.buf == buf then
+      return id
+    end
+  end
+  return nil
+end
+
 local function get_job_id_for_current_buf()
   local buf = vim.api.nvim_get_current_buf()
   if vim.bo[buf].buftype ~= "terminal" then return nil end
@@ -140,16 +153,139 @@ local function get_terminal(id)
   return terminals[id]
 end
 
+local function is_win_displayed(win)
+  return win ~= nil
+    and vim.api.nvim_win_is_valid(win)
+    and vim.fn.win_id2win(win) ~= 0
+end
+
 local function is_visible(id)
   local term = get_terminal(id)
   if not term then return false end
-  return term.win ~= nil and vim.api.nvim_win_is_valid(term.win)
+  return is_win_displayed(term.win)
 end
 
 local function is_buffer_valid(id)
   local term = get_terminal(id)
   if not term then return false end
   return term.buf ~= nil and vim.api.nvim_buf_is_valid(term.buf)
+end
+
+-- Per-terminal UI state: last known focus mode ("t" = terminal-job / insert,
+-- "n" = normal) and winsaveview snapshot for scroll restoration.
+local function ensure_ui_state(term)
+  if not term.ui_state then
+    term.ui_state = { mode = "t", view = nil }
+  end
+  return term.ui_state
+end
+
+-- Suppress TermLeave mode overwrites while hide() is tearing down the window.
+local hiding_terminal = false
+
+local function with_hiding_terminal(fn)
+  hiding_terminal = true
+  local ok, err = pcall(fn)
+  hiding_terminal = false
+  if not ok then
+    error(err)
+  end
+end
+
+-- Capture winsaveview from any valid window (including other tabpages).
+local function capture_view(win)
+  if not win or not vim.api.nvim_win_is_valid(win) then
+    return nil
+  end
+  return vim.api.nvim_win_call(win, function()
+    return vim.fn.winsaveview()
+  end)
+end
+
+local function save_ui_state(id, mode_override)
+  local term = get_terminal(id)
+  if not term then return end
+  local ui = ensure_ui_state(term)
+
+  if mode_override == "t" or mode_override == "n" then
+    ui.mode = mode_override
+  elseif is_win_displayed(term.win) and vim.api.nvim_get_current_win() == term.win then
+    local m = vim.api.nvim_get_mode().mode
+    ui.mode = (m == "t") and "t" or "n"
+  end
+
+  local view = capture_view(term.win)
+  if view then
+    ui.view = view
+  end
+end
+
+-- Restore or force-insert after a terminal window is shown.
+-- opts.force_insert: always enter terminal-job mode (send/paste paths).
+-- opts.restore_view: when restoring normal mode, apply winsaveview (default true).
+--   Set false when refocusing an already-visible window so live scroll is kept
+--   (also skips the job-mode jump-to-EOF).
+local function apply_ui_state(id, opts)
+  opts = opts or {}
+  local term = get_terminal(id)
+  if not term or not is_win_displayed(term.win) then
+    return
+  end
+
+  local force_insert = opts.force_insert == true
+  local restore_view = opts.restore_view ~= false
+  local ui = term.ui_state
+  local restore_normal = not force_insert and ui and ui.mode == "n"
+  -- Snapshot before stopinsert: TermLeave may rewrite the live ui_state table.
+  local view = ui and ui.view or nil
+
+  -- Invalidate any previously scheduled apply for this terminal.
+  term._ui_apply_gen = (term._ui_apply_gen or 0) + 1
+  local gen = term._ui_apply_gen
+
+  vim.api.nvim_set_current_win(term.win)
+  vim.schedule(function()
+    if term._ui_apply_gen ~= gen or not is_win_displayed(term.win) then
+      return
+    end
+    vim.api.nvim_set_current_win(term.win)
+    if restore_normal then
+      vim.cmd("stopinsert")
+      if restore_view and view then
+        vim.api.nvim_win_call(term.win, function()
+          pcall(vim.fn.winrestview, view)
+        end)
+      end
+      return
+    end
+    -- Jump to the end first — startinsert does nothing useful in scrollback.
+    -- Skip when refocusing an already-visible window (restore_view == false).
+    if restore_view then
+      vim.api.nvim_win_call(term.win, function()
+        local last = vim.api.nvim_buf_line_count(0)
+        pcall(vim.api.nvim_win_set_cursor, 0, { last, 0 })
+      end)
+    end
+    vim.cmd("startinsert")
+  end)
+end
+
+function M.save_ui_state(id, mode_override)
+  save_ui_state(id, mode_override)
+end
+
+function M.apply_ui_state(id, opts)
+  apply_ui_state(id, opts)
+end
+
+-- Tab-local: true only when the terminal window is shown in the current tabpage.
+function M.is_visible(id)
+  return is_visible(id)
+end
+
+-- Resolve a YAPT terminal id from a buffer (default: current buffer).
+function M.id_for_buf(buf)
+  return id_for_buf(buf)
 end
 
 function M.is_running(id)
@@ -209,20 +345,9 @@ local function sync_fullscreen_state()
   end
 end
 
-local function hide(id)
-  id = id or active_id or default_id
-  if is_visible(id) then
-    local term = get_terminal(id)
-    if term then
-      vim.api.nvim_win_hide(term.win)
-      term.win = nil
-    end
-  end
-end
-
-function M.hide(id)
-  hide(id)
-end
+-- Forward-declared: hide() must route fullscreen ids through hide_fullscreen
+-- so nvim_win_hide never drops a taken-over editor window without restore.
+local hide_fullscreen
 
 local function show_fullscreen(id)
   local term = get_terminal(id)
@@ -248,23 +373,62 @@ local function show_fullscreen(id)
   return true
 end
 
-local function hide_fullscreen()
+hide_fullscreen = function(mode_override)
   sync_fullscreen_state()
   if not fullscreen_state.active then return end
 
-  if fullscreen_state.saved_win and vim.api.nvim_win_is_valid(fullscreen_state.saved_win) then
-    local win = fullscreen_state.saved_win
-    local replacement = fullscreen_state.saved_buf
-    if not replacement or not vim.api.nvim_buf_is_valid(replacement) then
-      replacement = util.find_or_create_restore_buffer()
+  local term_id = fullscreen_state.terminal_id
+
+  with_hiding_terminal(function()
+    save_ui_state(term_id, mode_override)
+
+    if fullscreen_state.saved_win and vim.api.nvim_win_is_valid(fullscreen_state.saved_win) then
+      local win = fullscreen_state.saved_win
+      local replacement = fullscreen_state.saved_buf
+      if not replacement or not vim.api.nvim_buf_is_valid(replacement) then
+        replacement = util.find_or_create_restore_buffer()
+      end
+      vim.api.nvim_win_set_buf(win, replacement)
     end
-    vim.api.nvim_win_set_buf(win, replacement)
+
+    local term = get_terminal(term_id)
+    if term then term.win = nil end
+
+    reset_fullscreen_state()
+  end)
+end
+
+-- Hide a terminal window in any tabpage. Unlike is_visible (tab-local), this
+-- closes a still-valid win even when it lives in another tab (delete/switch).
+-- Fullscreen terminals always go through hide_fullscreen (restore saved buffer).
+local function hide(id, mode_override)
+  id = id or active_id or default_id
+  sync_fullscreen_state()
+  if fullscreen_state.active and fullscreen_state.terminal_id == id then
+    hide_fullscreen(mode_override)
+    return
   end
 
-  local term = get_terminal(fullscreen_state.terminal_id)
-  if term then term.win = nil end
+  local term = get_terminal(id)
+  if not term or not term.win or not vim.api.nvim_win_is_valid(term.win) then
+    return
+  end
 
-  reset_fullscreen_state()
+  with_hiding_terminal(function()
+    save_ui_state(id, mode_override)
+    local win = term.win
+    local ok = pcall(vim.api.nvim_win_hide, win)
+    -- Only drop the handle when hide succeeded (or the win is already gone).
+    -- A failed hide (e.g. last window) must keep term.win so show/switch
+    -- do not open a duplicate for a still-displayed buffer.
+    if ok or not vim.api.nvim_win_is_valid(win) then
+      term.win = nil
+    end
+  end)
+end
+
+function M.hide(id, mode_override)
+  hide(id, mode_override)
 end
 
 function M.is_fullscreen_active(id)
@@ -275,28 +439,61 @@ function M.is_fullscreen_active(id)
   return fullscreen_state.active
 end
 
-function M.hide_fullscreen()
-  hide_fullscreen()
+-- True when a fullscreen terminal is shown in the *current* tabpage.
+-- Use this in from-terminal handlers; is_fullscreen_active() is global.
+-- When id is given, true only if that terminal is the one shown fullscreen here.
+function M.is_fullscreen_in_current_tab(id)
+  sync_fullscreen_state()
+  if not (fullscreen_state.active and is_visible(fullscreen_state.terminal_id)) then
+    return false
+  end
+  if id then
+    return fullscreen_state.terminal_id == id
+  end
+  return true
 end
 
-local function show(id, config)
-  id = id or active_id or default_id
-  if not is_buffer_valid(id) then
-    return false
-  end
+function M.hide_fullscreen(mode_override)
+  hide_fullscreen(mode_override)
+end
 
-  local term = get_terminal(id)
-  if not term then
-    return false
-  end
+-- Tear down fullscreen in its current tabpage, then take over the current window.
+-- Used when the terminal is fullscreen in another tab and should rehome here
+-- (parity with split reuse across tabs) instead of merely hiding.
+local function rehome_fullscreen(id, apply_opts)
+  hide_fullscreen()
+  show_fullscreen(id)
+  apply_ui_state(id, apply_opts)
+end
 
-  local size
+local function split_size(config)
   if config.split.position == "right" or config.split.position == "left" then
-    size = math.floor(vim.o.columns * config.split.size)
-  else
-    size = math.floor(vim.o.lines * config.split.size)
+    return math.floor(vim.o.columns * config.split.size)
   end
+  return math.floor(vim.o.lines * config.split.size)
+end
 
+local function apply_split_size(win, config)
+  local size = split_size(config)
+  if config.split.position == "right" or config.split.position == "left" then
+    vim.api.nvim_win_set_width(win, size)
+  else
+    vim.api.nvim_win_set_height(win, size)
+  end
+end
+
+local function split_direction(config)
+  if config.split.position == "right" then
+    return "right"
+  elseif config.split.position == "left" then
+    return "left"
+  elseif config.split.position == "top" then
+    return "above"
+  end
+  return "below"
+end
+
+local function open_split_window(term, config)
   local split_cmd
   if config.split.position == "right" then
     split_cmd = "rightbelow vsplit"
@@ -311,17 +508,86 @@ local function show(id, config)
   vim.cmd(split_cmd)
   term.win = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(term.win, term.buf)
+  apply_split_size(term.win, config)
+end
 
-  if config.split.position == "right" or config.split.position == "left" then
-    vim.api.nvim_win_set_width(term.win, size)
-  else
-    vim.api.nvim_win_set_height(term.win, size)
+-- Reuse a still-valid terminal window.
+-- nvim_win_hide closes the window, so this cannot revive a hidden split; it
+-- only focuses a window already in this tabpage, or moves one from another
+-- tabpage into the configured split position/size.
+-- Stealing the window across tabs is intentional: with tab-local is_visible,
+-- show/toggle from another tabpage rehomes the existing window here rather
+-- than leaving a stray split behind or opening a second one.
+local function reuse_split_window(term, config)
+  if not term.win or not vim.api.nvim_win_is_valid(term.win) then
+    return false
+  end
+  -- Fullscreen windows must be torn down via hide_fullscreen (restore buffer),
+  -- not relocated with nvim_win_set_config.
+  if fullscreen_state.active and term.win == fullscreen_state.saved_win then
+    return false
+  end
+  if is_win_displayed(term.win) then
+    vim.api.nvim_set_current_win(term.win)
+    return true
+  end
+
+  local old_win = term.win
+  local ok = pcall(vim.api.nvim_win_set_config, old_win, {
+    split = split_direction(config),
+    win = vim.api.nvim_get_current_win(),
+  })
+  if ok and is_win_displayed(term.win) then
+    if vim.api.nvim_win_get_buf(term.win) ~= term.buf then
+      vim.api.nvim_win_set_buf(term.win, term.buf)
+    end
+    apply_split_size(term.win, config)
+    vim.api.nvim_set_current_win(term.win)
+    return true
+  end
+
+  -- Move failed: close the stray window so open_split_window won't duplicate it.
+  if vim.api.nvim_win_is_valid(old_win) then
+    pcall(vim.api.nvim_win_close, old_win, true)
+  end
+  term.win = nil
+  return false
+end
+
+local function show(id, config)
+  id = id or active_id or default_id
+  if not is_buffer_valid(id) then
+    return false
+  end
+
+  local term = get_terminal(id)
+  if not term then
+    return false
+  end
+
+  -- Demote/rehome: never move a fullscreen surface into a split in place.
+  sync_fullscreen_state()
+  if fullscreen_state.active and fullscreen_state.terminal_id == id then
+    hide_fullscreen()
+  end
+
+  if not reuse_split_window(term, config) then
+    open_split_window(term, config)
   end
 
   term.display_mode = "split"
   active_id = id
 
   return true
+end
+
+-- Show without toggling (for switch_to and other "make visible" callers).
+function M.show(id, config)
+  return show(id, config)
+end
+
+function M.show_fullscreen(id)
+  return show_fullscreen(id)
 end
 
 -- Create a new terminal instance (reusable function for creating terminals).
@@ -345,6 +611,7 @@ local function create_terminal_instance(id, config, command, display_mode)
 
   local term = terminals[id]
   term.display_mode = display_mode
+  ensure_ui_state(term)
   term.buf = vim.api.nvim_create_buf(false, true)
 
   if display_mode == "fullscreen" then
@@ -420,7 +687,8 @@ local function create_terminal_instance(id, config, command, display_mode)
   term_keys.exit = term_keys.hide
 
   if term_keys.exit and term_keys.exit ~= "" then
-    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.exit, '<C-\\><C-n>:lua require("yapt").hide_from_terminal_handler()<CR>', {
+    -- Use <Cmd> without <C-\><C-n> so we can record terminal-job mode before hide.
+    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.exit, '<Cmd>lua require("yapt").hide_from_terminal_handler("t")<CR>', {
       noremap = true,
       silent = true,
       desc = "Hide terminal window"
@@ -428,15 +696,47 @@ local function create_terminal_instance(id, config, command, display_mode)
   end
 
   if term_keys.hide and term_keys.hide ~= "" then
-    vim.api.nvim_buf_set_keymap(term.buf, 'n', term_keys.hide, ':lua require("yapt").hide_from_terminal_handler()<CR>', {
+    vim.api.nvim_buf_set_keymap(term.buf, 'n', term_keys.hide, '<Cmd>lua require("yapt").hide_from_terminal_handler("n")<CR>', {
       noremap = true,
       silent = true,
       desc = "Hide terminal window"
     })
   end
 
+  vim.api.nvim_create_autocmd("TermEnter", {
+    buffer = term.buf,
+    callback = function()
+      local t = terminals[id]
+      if t then
+        ensure_ui_state(t).mode = "t"
+      end
+    end,
+  })
+
+  vim.api.nvim_create_autocmd("TermLeave", {
+    buffer = term.buf,
+    callback = function()
+      if hiding_terminal then
+        return
+      end
+      local buf = term.buf
+      -- Defer: distinguish intentional stopinsert / <C-\><C-n> (still on this
+      -- buffer) from focus leaving the window (keep prior mode, usually "t").
+      vim.schedule(function()
+        if hiding_terminal or not terminals[id] then
+          return
+        end
+        if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_get_current_buf() == buf then
+          save_ui_state(id, "n")
+        end
+      end)
+    end,
+  })
+
+  -- Terminal-job maps use <Cmd> and pass "t" so hide/switch paths keep job mode
+  -- in ui_state (avoid <C-\><C-n>, which would TermLeave and record "n").
   if term_keys.new and term_keys.new ~= "" then
-    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.new, '<C-\\><C-n>:lua require("yapt").new_terminal_from_terminal_handler()<CR>', {
+    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.new, '<Cmd>lua require("yapt").new_terminal_from_terminal_handler("t")<CR>', {
       noremap = true,
       silent = true,
       desc = "Create new terminal (hide current first)"
@@ -444,7 +744,7 @@ local function create_terminal_instance(id, config, command, display_mode)
   end
 
   if term_keys.rename and term_keys.rename ~= "" then
-    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.rename, '<C-\\><C-n>:lua require("yapt").rename_terminal_handler()<CR>', {
+    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.rename, '<Cmd>lua require("yapt").rename_terminal_handler("t")<CR>', {
       noremap = true,
       silent = true,
       desc = "Rename current terminal"
@@ -452,7 +752,7 @@ local function create_terminal_instance(id, config, command, display_mode)
   end
 
   if term_keys.select and term_keys.select ~= "" then
-    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.select, '<C-\\><C-n>:lua require("yapt").select_terminal_from_terminal_handler()<CR>', {
+    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.select, '<Cmd>lua require("yapt").select_terminal_from_terminal_handler("t")<CR>', {
       noremap = true,
       silent = true,
       desc = "Select terminal"
@@ -460,7 +760,7 @@ local function create_terminal_instance(id, config, command, display_mode)
   end
 
   if term_keys.prompt_last and term_keys.prompt_last ~= "" then
-    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.prompt_last, '<C-\\><C-n>:lua require("yapt").open_last_prompt_from_terminal_handler()<CR>', {
+    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.prompt_last, '<Cmd>lua require("yapt").open_last_prompt_from_terminal_handler("t")<CR>', {
       noremap = true,
       silent = true,
       desc = "Open last prompt file"
@@ -468,12 +768,12 @@ local function create_terminal_instance(id, config, command, display_mode)
   end
 
   if term_keys.toggle_fullscreen and term_keys.toggle_fullscreen ~= "" then
-    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.toggle_fullscreen, '<C-\\><C-n>:lua require("yapt").fullscreen_toggle_from_terminal_handler()<CR>', {
+    vim.api.nvim_buf_set_keymap(term.buf, 't', term_keys.toggle_fullscreen, '<Cmd>lua require("yapt").fullscreen_toggle_from_terminal_handler("t")<CR>', {
       noremap = true,
       silent = true,
       desc = "Toggle fullscreen mode"
     })
-    vim.api.nvim_buf_set_keymap(term.buf, 'n', term_keys.toggle_fullscreen, ':lua require("yapt").fullscreen_toggle_from_terminal_handler()<CR>', {
+    vim.api.nvim_buf_set_keymap(term.buf, 'n', term_keys.toggle_fullscreen, '<Cmd>lua require("yapt").fullscreen_toggle_from_terminal_handler("n")<CR>', {
       noremap = true,
       silent = true,
       desc = "Toggle fullscreen mode"
@@ -530,19 +830,23 @@ end
 
 -- Toggle terminal visibility.
 --
--- Semantics:
---   - If the terminal is visible (in any mode) -> hide it.
+-- Semantics (tab-local visibility):
+--   - Visible in this tabpage (split or fullscreen) -> hide it.
+--   - Fullscreen / split only in another tabpage -> rehome here (do not hide).
 --   - Otherwise -> show it in split mode (creating it if needed).
 --
--- Pressing the split-toggle key while the terminal is fullscreen no longer
--- silently demotes it to a split: it just hides, matching the expectation
--- that the toggle key toggles visibility.
+-- Pressing the split-toggle key while the terminal is fullscreen in this
+-- tabpage no longer silently demotes it to a split: it just hides.
 function M.toggle(config, id, command)
   id = id or active_id or default_id
   sync_fullscreen_state()
 
   if fullscreen_state.active and fullscreen_state.terminal_id == id then
-    hide_fullscreen()
+    if is_visible(id) then
+      hide_fullscreen()
+    else
+      rehome_fullscreen(id)
+    end
     return
   end
 
@@ -550,7 +854,7 @@ function M.toggle(config, id, command)
     hide(id)
   elseif is_buffer_valid(id) and M.is_running(id) then
     show(id, config)
-    vim.schedule(function() vim.cmd("startinsert") end)
+    apply_ui_state(id)
   else
     create_terminal_instance(id, config, command, "split")
   end
@@ -558,18 +862,23 @@ end
 
 -- Toggle a terminal in fullscreen mode.
 --
--- Semantics:
---   - If this terminal is already shown fullscreen -> hide it (giving the
---     window back to the user's previous buffer).
---   - If it is shown in a split -> hide the split, then take over the now
---     focused window.
+-- Semantics (tab-local visibility):
+--   - Fullscreen in this tabpage -> hide it (restore the previous buffer).
+--   - Fullscreen only in another tabpage -> rehome into the current window.
+--   - Shown in a split here -> hide the split, then take over the focused window.
 --   - Otherwise -> show it (creating if needed) in fullscreen mode.
-function M.toggle_fullscreen(config, id, command)
+--
+-- apply_opts: forwarded to apply_ui_state / rehome when showing (e.g. force_insert).
+function M.toggle_fullscreen(config, id, command, apply_opts)
   id = id or active_id or default_id
   sync_fullscreen_state()
 
   if fullscreen_state.active and fullscreen_state.terminal_id == id then
-    hide_fullscreen()
+    if is_visible(id) then
+      hide_fullscreen()
+    else
+      rehome_fullscreen(id, apply_opts)
+    end
     return
   end
 
@@ -579,16 +888,16 @@ function M.toggle_fullscreen(config, id, command)
     hide_fullscreen()
   end
 
-  -- If this terminal is currently visible in a split, close that split.
+  -- Drop any existing window for this terminal (split in this tab or another).
+  -- Use hide() rather than is_visible(): visibility is tab-local, but a split
+  -- in another tabpage must still be closed to avoid duplicate windows.
   -- After nvim_win_hide focus shifts to a remaining window, which is the
   -- one we want to take over for fullscreen -- no need for vim.schedule.
-  if is_visible(id) then
-    hide(id)
-  end
+  hide(id)
 
   if is_buffer_valid(id) and M.is_running(id) then
     show_fullscreen(id)
-    vim.schedule(function() vim.cmd("startinsert") end)
+    apply_ui_state(id, apply_opts)
   else
     create_terminal_instance(id, config, command, "fullscreen")
   end
@@ -597,12 +906,19 @@ end
 -- Show the terminal in its preferred (last used) display mode.
 -- Used by callers that want to *make the terminal visible* without toggling
 -- (e.g. send_prompt_file_to_terminal), so the terminal doesn't get demoted from
--- fullscreen to split unexpectedly. No-op if already visible.
+-- fullscreen to split unexpectedly. No-op if already visible in this tabpage
+-- (callers that need insert when already visible must apply_ui_state themselves);
+-- rehomes when the preferred view exists only in another tabpage.
+-- When it actually shows or rehomes, force-inserts for send/paste workflows.
 function M.show_in_preferred_mode(config, id, command)
   id = id or active_id or default_id
   sync_fullscreen_state()
 
   if fullscreen_state.active and fullscreen_state.terminal_id == id then
+    if is_visible(id) then
+      return
+    end
+    rehome_fullscreen(id, { force_insert = true })
     return
   end
   if is_visible(id) then
@@ -615,14 +931,14 @@ function M.show_in_preferred_mode(config, id, command)
   if mode == "fullscreen" then
     if is_buffer_valid(id) and M.is_running(id) then
       show_fullscreen(id)
-      vim.schedule(function() vim.cmd("startinsert") end)
+      apply_ui_state(id, { force_insert = true })
     else
       create_terminal_instance(id, config, command, "fullscreen")
     end
   else
     if is_buffer_valid(id) and M.is_running(id) then
       show(id, config)
-      vim.schedule(function() vim.cmd("startinsert") end)
+      apply_ui_state(id, { force_insert = true })
     else
       create_terminal_instance(id, config, command, "split")
     end
@@ -645,9 +961,9 @@ function M.send_text(text, id)
     end
     vim.api.nvim_chan_send(term.job_id, text)
 
-    if term.win and vim.api.nvim_win_is_valid(term.win) then
-      vim.api.nvim_set_current_win(term.win)
-      vim.schedule(function() vim.cmd("startinsert") end)
+    if is_win_displayed(term.win) then
+      ensure_ui_state(term).mode = "t"
+      apply_ui_state(id, { force_insert = true })
     end
 
     return true

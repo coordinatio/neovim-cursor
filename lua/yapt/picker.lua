@@ -4,13 +4,15 @@
 -- - Telescope integration (preferred) with live preview of terminal content
 -- - vim.ui.select fallback for users without Telescope
 -- - Rename capability directly from picker with <C-r>
--- - Automatic return to terminal insert mode after selection
+-- - callback(nil) on dismiss so callers can restore terminal UI state
 --
 -- Features:
 -- - Live preview showing terminal buffer content
 -- - Status indicators (running/stopped, age)
 -- - Fuzzy search by terminal name
 -- - Picker automatically reopens after rename for seamless workflow
+--
+-- Focus/insert restoration after selection is left to the caller (apply_ui_state).
 --
 local tabs = require("yapt.tabs")
 local terminal = require("yapt.terminal")
@@ -48,13 +50,37 @@ local function pick_command_with_telescope(entries, callback)
     }),
     sorter = conf.generic_sorter({}),
     attach_mappings = function(prompt_bufnr, _map)
-      actions.select_default:replace(function()
-        actions.close(prompt_bufnr)
-        local selection = action_state.get_selected_entry()
-        if selection then
-          callback(selection.value)
+      local settled = false
+      local function settle(cmd)
+        if settled then
+          return
         end
+        settled = true
+        callback(cmd)
+      end
+
+      actions.select_default:replace(function()
+        local selection = action_state.get_selected_entry()
+        actions.close(prompt_bufnr)
+        settle(selection and selection.value or nil)
       end)
+
+      -- Dismiss only when the prompt is gone (same pattern as pick_terminal).
+      vim.api.nvim_create_autocmd("BufLeave", {
+        buffer = prompt_bufnr,
+        callback = function()
+          vim.schedule(function()
+            if settled then
+              return
+            end
+            if vim.api.nvim_buf_is_valid(prompt_bufnr) then
+              return
+            end
+            settle(nil)
+          end)
+        end,
+      })
+
       return true
     end,
   }):find()
@@ -73,12 +99,20 @@ local function pick_command_with_ui_select(entries, callback)
   }, function(_, idx)
     if idx then
       callback(entries[idx].command)
+    else
+      callback(nil)
     end
   end)
 end
 
+-- @param callback function(cmd|nil) Called with command, or nil on cancel/dismiss
 function M.pick_command(config, callback)
   local entries = config_module.resolve_command_entries(config)
+
+  if #entries == 0 then
+    callback(nil)
+    return
+  end
 
   if #entries == 1 then
     callback(entries[1].command)
@@ -192,71 +226,72 @@ local function pick_with_telescope(terminals, config, callback)
     sorter = conf.generic_sorter({}),
     previewer = terminal_previewer,
     attach_mappings = function(prompt_bufnr, map)
-      -- Default action: select terminal
+      local settled = false
+      local function settle(id)
+        if settled then
+          return
+        end
+        settled = true
+        callback(id)
+      end
+
+      -- Default action: select terminal (caller restores focus via apply_ui_state).
       actions.select_default:replace(function()
+        local selection = action_state.get_selected_entry()
         actions.close(prompt_bufnr)
-        local selection = action_state.get_selected_entry()
-        if selection then
-          callback(selection.id)
-          vim.schedule(function()
-            vim.cmd("startinsert")
-          end)
-        end
+        settle(selection and selection.id or nil)
       end)
 
-      -- Custom action: rename terminal with <C-r>
-      map("i", "<C-r>", function()
+      -- Rename via <C-r>: not a dismiss. Reopen on success; callback(nil) otherwise.
+      local function rename_selected()
         local selection = action_state.get_selected_entry()
-        if selection then
-          local term = selection.value
-          actions.close(prompt_bufnr)
+        if not selection then
+          return
+        end
+        local term = selection.value
+        settled = true
+        actions.close(prompt_bufnr)
 
-          vim.schedule(function()
-            vim.ui.input({
-              prompt = "Rename terminal: ",
-              default = term.name,
-            }, function(input)
-              if input and input ~= "" then
-                if tabs.rename_terminal(selection.id, input) then
-                  util.notify("Terminal renamed to: " .. input, vim.log.levels.INFO)
-                  vim.schedule(function()
-                    M.pick_terminal(config, callback)
-                  end)
-                else
-                  util.notify("Failed to rename terminal", vim.log.levels.ERROR)
-                end
+        vim.schedule(function()
+          vim.ui.input({
+            prompt = "Rename terminal: ",
+            default = term.name,
+          }, function(input)
+            if input and input ~= "" then
+              if tabs.rename_terminal(selection.id, input) then
+                util.notify("Terminal renamed to: " .. input, vim.log.levels.INFO)
+                vim.schedule(function()
+                  M.pick_terminal(config, callback)
+                end)
+                return
               end
-            end)
+              util.notify("Failed to rename terminal", vim.log.levels.ERROR)
+            end
+            callback(nil)
           end)
-        end
-      end)
+        end)
+      end
 
-      -- Also map <C-r> in normal mode for Telescope
-      map("n", "<C-r>", function()
-        local selection = action_state.get_selected_entry()
-        if selection then
-          local term = selection.value
-          actions.close(prompt_bufnr)
+      map("i", "<C-r>", rename_selected)
+      map("n", "<C-r>", rename_selected)
 
+      -- Dismiss only when the prompt is gone. Transient BufLeave (preview
+      -- focus, <C-w>) must not settle, or a later <CR> would be ignored.
+      -- Not once: a skipped transient leave must still observe the real close.
+      vim.api.nvim_create_autocmd("BufLeave", {
+        buffer = prompt_bufnr,
+        callback = function()
           vim.schedule(function()
-            vim.ui.input({
-              prompt = "Rename terminal: ",
-              default = term.name,
-            }, function(input)
-              if input and input ~= "" then
-                if tabs.rename_terminal(selection.id, input) then
-                  util.notify("Terminal renamed to: " .. input, vim.log.levels.INFO)
-                  vim.schedule(function()
-                    M.pick_terminal(config, callback)
-                  end)
-                else
-                  util.notify("Failed to rename terminal", vim.log.levels.ERROR)
-                end
-              end
-            end)
+            if settled then
+              return
+            end
+            if vim.api.nvim_buf_is_valid(prompt_bufnr) then
+              return
+            end
+            settle(nil)
           end)
-        end
-      end)
+        end,
+      })
 
       return true
     end,
@@ -267,7 +302,7 @@ end
 
 -- Pick terminal using vim.ui.select (fallback)
 -- @param terminals Array of terminal metadata
--- @param callback function(selected_id) Called with selected terminal ID
+-- @param callback function(selected_id|nil) Called with id, or nil on cancel
 local function pick_with_ui_select(terminals, callback)
   local items = {}
   local id_map = {}
@@ -282,24 +317,24 @@ local function pick_with_ui_select(terminals, callback)
     format_item = function(item)
       return item
     end,
-  }, function(choice, idx)
+  }, function(_, idx)
     if idx then
       callback(id_map[idx])
-      vim.schedule(function()
-        vim.cmd("startinsert")
-      end)
+    else
+      callback(nil)
     end
   end)
 end
 
 -- Main picker function - shows terminal selection UI
 -- @param config Configuration object
--- @param callback function(selected_id) Called with selected terminal ID
+-- @param callback function(selected_id|nil) Called with id, or nil on cancel/dismiss
 function M.pick_terminal(config, callback)
   local terminals = tabs.list_terminals()
 
   if #terminals == 0 then
     util.notify("No terminals available. Create one with <leader>an", vim.log.levels.WARN)
+    callback(nil)
     return
   end
 

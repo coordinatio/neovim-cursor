@@ -43,6 +43,7 @@ local function smart_toggle(display_mode)
 
   if not tabs.has_terminals() then
     picker.pick_command(config, function(cmd)
+      if not cmd then return end
       tabs.create_terminal(nil, config, cmd, display_mode)
     end)
     return
@@ -51,6 +52,7 @@ local function smart_toggle(display_mode)
   local last_id = tabs.get_last()
   if not last_id then
     picker.pick_command(config, function(cmd)
+      if not cmd then return end
       tabs.create_terminal(nil, config, cmd, display_mode)
     end)
     return
@@ -89,6 +91,7 @@ local function smart_toggle_with_selection(display_mode)
 
   if not tabs.has_terminals() then
     picker.pick_command(config, function(cmd)
+      if not cmd then return end
       tabs.create_terminal(nil, config, cmd, display_mode)
       send_after(200, link)
     end)
@@ -98,6 +101,7 @@ local function smart_toggle_with_selection(display_mode)
   local last_id = tabs.get_last()
   if not last_id then
     picker.pick_command(config, function(cmd)
+      if not cmd then return end
       tabs.create_terminal(nil, config, cmd, display_mode)
       send_after(200, link)
     end)
@@ -141,51 +145,107 @@ end
 
 function M.new_terminal_handler()
   picker.pick_command(config, function(cmd)
+    if not cmd then return end
     tabs.create_terminal(nil, config, cmd, "split")
   end)
 end
 
 function M.new_fullscreen_handler()
   picker.pick_command(config, function(cmd)
+    if not cmd then return end
     tabs.create_terminal(nil, config, cmd, "fullscreen")
   end)
 end
 
--- Hide the terminal regardless of which mode it's currently displayed in.
+-- Display mode of the focused YAPT terminal (not "any fullscreen in this tab").
+local function focused_terminal_display_mode()
+  local id = terminal.id_for_buf()
+  if id and terminal.is_fullscreen_in_current_tab(id) then
+    return "fullscreen"
+  end
+  return "split"
+end
+
+-- Hide the terminal in the current window (fullscreen or split).
 -- Mounted on terminal-mode keymaps so a single key always "puts the terminal away".
-function M.hide_from_terminal_handler()
-  if terminal.is_fullscreen_active() then
-    terminal.hide_fullscreen()
-  else
-    terminal.hide()
+-- Resolves by current buffer so a non-active terminal focused in this window is
+-- hidden, not whatever active_id / fullscreen sibling happens to be.
+-- @param mode string|nil "t" (terminal-job) or "n" (normal); used to restore focus later
+local function hide_current_terminal(mode)
+  local id = terminal.id_for_buf()
+  if not id then
+    return
+  end
+  if terminal.is_fullscreen_in_current_tab(id) then
+    terminal.hide_fullscreen(mode)
+    return
+  end
+  terminal.hide(id, mode)
+end
+
+function M.hide_from_terminal_handler(mode)
+  hide_current_terminal(mode)
+end
+
+-- Leave terminal-job mode for UI that needs normal mode (pickers, vim.ui.input).
+-- Intentional stopinsert records "n" via TermLeave while still on the buffer.
+-- Callers that should return to the invoking mode must save/apply that mode when
+-- the UI finishes.
+local function leave_terminal_job_mode()
+  if vim.api.nvim_get_mode().mode == "t" then
+    vim.cmd("stopinsert")
   end
 end
 
--- From within a terminal: hide whatever mode it's in, then run the new-terminal flow.
--- Preserves the current display mode (fullscreen or split) for the new terminal.
-function M.new_terminal_from_terminal_handler()
-  local display_mode = terminal.is_fullscreen_active() and "fullscreen" or "split"
-
-  if display_mode == "fullscreen" then
-    terminal.hide_fullscreen()
-  else
-    terminal.hide()
+-- Restore focus mode after a modal UI closes while still on a terminal.
+-- @param id string Terminal id
+-- @param mode string|nil "t"/"n" from the invoking keymap; nil keeps current ui_state
+local function restore_terminal_ui(id, mode)
+  if not id then
+    return
   end
+  if mode == "t" or mode == "n" then
+    terminal.save_ui_state(id, mode)
+  end
+  terminal.apply_ui_state(id, { restore_view = false })
+end
+
+-- From within a terminal: pick a command, then hide and create in the same
+-- display mode. Terminal stays visible until a command is chosen so cancel
+-- can restore focus (parity with select/rename).
+-- @param mode string|nil "t" or "n" from the invoking keymap
+function M.new_terminal_from_terminal_handler(mode)
+  local display_mode = focused_terminal_display_mode()
+  local from_id = terminal.id_for_buf()
+  leave_terminal_job_mode()
 
   vim.schedule(function()
     picker.pick_command(config, function(cmd)
+      if not cmd then
+        restore_terminal_ui(from_id, mode)
+        return
+      end
+      if from_id then
+        if terminal.is_fullscreen_active(from_id) then
+          terminal.hide_fullscreen(mode)
+        else
+          terminal.hide(from_id, mode)
+        end
+      end
       tabs.create_terminal(nil, config, cmd, display_mode)
     end)
   end)
 end
 
--- From within a terminal: hide whatever mode it's in, then open the latest prompt buffer.
-function M.open_last_prompt_from_terminal_handler()
-  if terminal.is_fullscreen_active() then
-    terminal.hide_fullscreen()
-  else
-    terminal.hide()
+-- From within a terminal: hide, then open the latest prompt buffer.
+-- Checks history first so cancel/empty history does not leave the terminal hidden.
+-- @param mode string|nil "t" or "n" from the invoking keymap
+function M.open_last_prompt_from_terminal_handler(mode)
+  if not history.get_last_prompt_file(config) then
+    util.notify("No prompt files in history", vim.log.levels.WARN)
+    return
   end
+  hide_current_terminal(mode)
 
   vim.schedule(function()
     history.open_last_prompt_buffer(config)
@@ -193,53 +253,74 @@ function M.open_last_prompt_from_terminal_handler()
 end
 
 -- From within a terminal, swap between split and fullscreen presentation.
-function M.fullscreen_toggle_from_terminal_handler()
-  if terminal.is_fullscreen_active() then
-    terminal.hide_fullscreen()
+-- @param mode string|nil "t" or "n" from the invoking keymap
+function M.fullscreen_toggle_from_terminal_handler(mode)
+  local id = terminal.id_for_buf() or tabs.get_active()
+  if not id then
     return
   end
 
-  local active_id = tabs.get_active()
-  if not active_id then
+  if terminal.is_fullscreen_in_current_tab(id) then
+    terminal.hide_fullscreen(mode)
     return
   end
 
-  local term_meta = tabs.get_terminal(active_id)
-  terminal.hide(active_id)
-  vim.schedule(function()
-    terminal.toggle_fullscreen(config, active_id, term_meta and term_meta.command)
-  end)
+  -- Persist invoking mode once; toggle_fullscreen's hide() will not clobber it
+  -- when focus is still on this window (or mode was saved above).
+  if mode == "t" or mode == "n" then
+    terminal.save_ui_state(id, mode)
+  end
+  local term_meta = tabs.get_terminal(id)
+  terminal.toggle_fullscreen(config, id, term_meta and term_meta.command)
 end
 
 function M.select_terminal_handler()
+  -- Prefer focused buffer: active_id can diverge when another term is shown.
+  local from_id = terminal.id_for_buf()
+  local leave_id = from_id or tabs.get_active()
+
   picker.pick_terminal(config, function(selected_id)
-    if selected_id then
-      tabs.switch_to(selected_id, config)
+    if not selected_id then
+      if from_id then
+        restore_terminal_ui(from_id)
+      end
+      return
     end
+    tabs.switch_to(selected_id, config, nil, nil, leave_id)
   end)
 end
 
 -- From within a terminal: capture the current display mode before the picker
 -- opens, then switch to the selected terminal in the same mode.
-function M.select_terminal_from_terminal_handler()
-  local display_mode = terminal.is_fullscreen_active() and "fullscreen" or "split"
+-- @param mode string|nil "t" or "n" from the invoking keymap
+function M.select_terminal_from_terminal_handler(mode)
+  leave_terminal_job_mode()
+  local display_mode = focused_terminal_display_mode()
+  -- Prefer focused buffer: active_id can diverge when another term is shown.
+  local from_id = terminal.id_for_buf() or tabs.get_active()
 
   picker.pick_terminal(config, function(selected_id)
-    if selected_id then
-      tabs.switch_to(selected_id, config, display_mode)
+    if not selected_id then
+      restore_terminal_ui(from_id, mode)
+      return
     end
+    -- leave_ui_mode / leave_id: switch_to persists mode on the focused terminal.
+    tabs.switch_to(selected_id, config, display_mode, mode, from_id)
   end)
 end
 
-function M.rename_terminal_handler()
-  local active_id = tabs.get_active()
+-- @param mode string|nil "t" when invoked from a terminal-job keymap
+function M.rename_terminal_handler(mode)
+  local id = terminal.id_for_buf() or tabs.get_active()
 
-  if not active_id then
+  if not id then
     util.notify("No active terminal to rename. Create one with <leader>an", vim.log.levels.WARN)
     return
   end
 
-  local term = tabs.get_terminal(active_id)
+  leave_terminal_job_mode()
+
+  local term = tabs.get_terminal(id)
   local current_name = term and term.name or ""
 
   local current_buf = vim.api.nvim_get_current_buf()
@@ -250,16 +331,14 @@ function M.rename_terminal_handler()
     default = current_name,
   }, function(input)
     if input and input ~= "" then
-      if tabs.rename_terminal(active_id, input) then
+      if tabs.rename_terminal(id, input) then
         util.notify("Terminal renamed to: " .. input, vim.log.levels.INFO)
-        if is_terminal_buf then
-          vim.schedule(function() vim.cmd("startinsert") end)
-        end
       else
         util.notify("Failed to rename terminal", vim.log.levels.ERROR)
       end
-    elseif is_terminal_buf then
-      vim.schedule(function() vim.cmd("startinsert") end)
+    end
+    if is_terminal_buf then
+      restore_terminal_ui(id, mode)
     end
   end)
 end
@@ -450,6 +529,7 @@ function M.setup(user_config)
   vim.api.nvim_create_user_command("PTNew", function(opts)
     local name = opts.args and opts.args ~= "" and opts.args or nil
     picker.pick_command(config, function(cmd)
+      if not cmd then return end
       tabs.create_terminal(name, config, cmd, "split")
     end)
   end, {

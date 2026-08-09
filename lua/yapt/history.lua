@@ -314,6 +314,7 @@ end
 -- @param display_mode string|nil "split" (default) or "fullscreen"
 local function pick_create_and_send(config, text, source_buf, success_message, display_mode)
   picker.pick_command(config, function(cmd)
+    if not cmd then return end
     if display_mode == "fullscreen" then
       prepare_prompt_buffer_for_fullscreen(source_buf, config)
     end
@@ -381,15 +382,14 @@ function M.send_prompt_file_to_terminal(config)
     return
   end
 
-  local t_state = terminal.get_state(last_id)
   local term_meta = tabs.get_terminal(last_id)
   local stored_cmd = term_meta and term_meta.command
 
-  if not t_state.is_visible then
+  -- Tab-local visibility: show/rehome when not in this tabpage; force-insert for send.
+  if not terminal.is_visible(last_id) then
     terminal.show_in_preferred_mode(config, last_id, stored_cmd)
-  elseif t_state.win and vim.api.nvim_win_is_valid(t_state.win) then
-    vim.api.nvim_set_current_win(t_state.win)
-    vim.cmd("startinsert")
+  else
+    terminal.apply_ui_state(last_id, { force_insert = true })
   end
 
   vim.defer_fn(function()
@@ -423,15 +423,16 @@ function M.send_prompt_file_to_terminal_fullscreen(config)
   local stored_cmd = term_meta and term_meta.command
 
   if terminal.is_fullscreen_active(last_id) then
-    local t_state = terminal.get_state(last_id)
-    if t_state.win and vim.api.nvim_win_is_valid(t_state.win) then
-      vim.api.nvim_set_current_win(t_state.win)
-      vim.cmd("startinsert")
+    if terminal.is_visible(last_id) then
+      terminal.apply_ui_state(last_id, { force_insert = true })
+    else
+      -- Fullscreen only in another tabpage: rehome here (do not jump tabs).
+      terminal.show_in_preferred_mode(config, last_id, stored_cmd)
     end
   else
     prepare_prompt_buffer_for_fullscreen(source_buf, config)
 
-    terminal.toggle_fullscreen(config, last_id, stored_cmd)
+    terminal.toggle_fullscreen(config, last_id, stored_cmd, { force_insert = true })
   end
 
   vim.defer_fn(function()
