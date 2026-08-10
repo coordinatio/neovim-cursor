@@ -11,8 +11,8 @@ M.defaults = {
   keybindings = {
     toggle = "<A-`>",                -- Toggle terminal window in split (show last active)
     toggle_fullscreen = "<A-=>",     -- Toggle terminal window fullscreen (show last active)
-    new = "<leader>an",              -- Create new terminal
-    new_fullscreen = "<leader>aN",   -- Create new terminal in fullscreen
+    new = "<leader>an",              -- Create new terminal; send current file if non-empty
+    new_fullscreen = "<leader>aN",   -- Create new terminal fullscreen; send current file if non-empty
     select = "<F6>",                 -- Select terminal (fuzzy picker)
     rename = "<leader>ar",           -- Rename current terminal
     prompt_new = "<leader>ah",       -- Create new prompt file in .nvim-yapt/history
@@ -65,18 +65,6 @@ M.defaults = {
   },
 }
 
--- Track whether we already warned about a removed/deprecated option,
--- so we only nag the user once per Neovim session.
-local warned_keys = {}
-
-local function warn_once(key, message)
-  if warned_keys[key] then return end
-  warned_keys[key] = true
-  vim.schedule(function()
-    util.notify(message, vim.log.levels.WARN)
-  end)
-end
-
 -- Old history directories that should be migrated to the current default.
 local legacy_history_dirs = {
   ".nvim-cursor/history",
@@ -112,26 +100,10 @@ local function migrate_history_dir(target_dir)
   end
 end
 
--- Deprecated options: tell the user once that their config still works,
--- but should be migrated.
-local function check_deprecated_options(user_config)
-  if not user_config or not user_config.keybindings then return end
-
-  if user_config.keybindings.prompt_send_new ~= nil then
-    warn_once("prompt_send_new",
-      "`keybindings.prompt_send_new` is deprecated but still supported. " ..
-      "The default <leader>aE slot is now used by `keybindings.prompt_send_fullscreen`; " ..
-      "create a new terminal first, then use `keybindings.prompt_send` (or `keybindings.prompt_send_fullscreen`)."
-    )
-  end
-end
-
 -- Merge user config with defaults
 -- Maintains backward compatibility with old 'keybinding' option.
 function M.setup(user_config)
   user_config = user_config or {}
-
-  check_deprecated_options(user_config)
 
   if not user_config.history then
     migrate_history_dir(M.defaults.history.dir)

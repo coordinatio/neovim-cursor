@@ -312,43 +312,55 @@ end
 
 -- Create a fresh terminal (via picker) and send `text` to it once it boots.
 -- @param display_mode string|nil "split" (default) or "fullscreen"
-local function pick_create_and_send(config, text, source_buf, success_message, display_mode)
+-- @param name string|nil optional terminal name
+local function pick_create_and_send(config, text, source_buf, success_message, display_mode, name)
   picker.pick_command(config, function(cmd)
     if not cmd then return end
     if display_mode == "fullscreen" then
       prepare_prompt_buffer_for_fullscreen(source_buf, config)
     end
 
-    tabs.create_terminal(nil, config, cmd, display_mode)
+    tabs.create_terminal(name, config, cmd, display_mode)
     vim.defer_fn(function()
       send_to_active_terminal(text, source_buf, config, success_message)
     end, 200)
   end)
 end
 
-local function current_file_text_or_notify(config)
+-- Read current buffer text for send, with optional soft mode.
+-- Soft mode: no warnings; returns nil when empty or non-file (used by create-maybe-send).
+-- Strict mode: warns and aborts on non-file or empty buffers (used by :PTSend).
+-- Unnamed buffers with content are persisted to prompt history first.
+-- @param config Plugin config
+-- @param opts table|nil { soft = boolean }
+-- @return buf, text|nil  or nil, nil when there is nothing sendable
+local function current_file_text(config, opts)
+  opts = opts or {}
+  local soft = opts.soft == true
   local buf = vim.api.nvim_get_current_buf()
 
   if vim.bo[buf].buftype ~= "" then
-    util.notify("Current buffer is not a normal file buffer", vim.log.levels.WARN)
+    if not soft then
+      util.notify("Current buffer is not a normal file buffer", vim.log.levels.WARN)
+    end
+    return nil, nil
+  end
+
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  if vim.trim(table.concat(lines, "\n")) == "" then
+    if not soft then
+      util.notify("Current buffer is empty — nothing to send", vim.log.levels.WARN)
+    end
     return nil, nil
   end
 
   local path = vim.api.nvim_buf_get_name(buf)
   if path == nil or path == "" then
-    -- Unnamed/new buffer: auto-create a history file and place the content
-    -- in it before sending (only if there is something to send).
-    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-    if vim.trim(table.concat(lines, "\n")) == "" then
-      util.notify("Current buffer is empty — nothing to send", vim.log.levels.WARN)
-      return nil, nil
-    end
     local new_path = persist_unnamed_buffer_to_history(buf, lines, config)
     if not new_path then
       return nil, nil
     end
     util.notify("Saved new buffer as " .. new_path, vim.log.levels.INFO)
-    -- Buffer is now the (unmodified) history file; send the content we read.
     return buf, table.concat(lines, "\n") .. "\n"
   end
 
@@ -366,7 +378,7 @@ end
 -- Saves the current buffer if modified so the file exists on disk for the CLI.
 -- @param config Plugin config (for terminal/tabs)
 function M.send_prompt_file_to_terminal(config)
-  local source_buf, text_to_send = current_file_text_or_notify(config)
+  local source_buf, text_to_send = current_file_text(config)
   if not source_buf then
     return
   end
@@ -403,7 +415,7 @@ end
 -- Saves the current buffer if modified so the file exists on disk for the CLI.
 -- @param config Plugin config (for terminal/tabs)
 function M.send_prompt_file_to_terminal_fullscreen(config)
-  local source_buf, text_to_send = current_file_text_or_notify(config)
+  local source_buf, text_to_send = current_file_text(config)
   if not source_buf then
     return
   end
@@ -440,15 +452,32 @@ function M.send_prompt_file_to_terminal_fullscreen(config)
   end, 100)
 end
 
--- Deprecated compatibility shim. Creates a fresh split terminal, then sends the
--- current file contents to it.
-function M.send_prompt_file_to_new_terminal(config)
-  local source_buf, text_to_send = current_file_text_or_notify(config)
-  if not source_buf then
+-- Always create a new terminal session. If the current buffer has sendable
+-- content, send it after the terminal boots; otherwise only create.
+-- @param config Plugin config
+-- @param opts table|nil { display_mode = "split"|"fullscreen", name = string|nil }
+function M.create_terminal_maybe_send(config, opts)
+  opts = opts or {}
+  local display_mode = opts.display_mode or "split"
+  local name = opts.name
+
+  local source_buf, text_to_send = current_file_text(config, { soft = true })
+  if source_buf and text_to_send then
+    pick_create_and_send(
+      config,
+      text_to_send,
+      source_buf,
+      "Sent current file contents to new terminal",
+      display_mode,
+      name
+    )
     return
   end
 
-  pick_create_and_send(config, text_to_send, source_buf, "Sent current file contents to new terminal")
+  picker.pick_command(config, function(cmd)
+    if not cmd then return end
+    tabs.create_terminal(name, config, cmd, display_mode)
+  end)
 end
 
 -- Return full path of the most recent prompt file in history (by timestamp in filename).

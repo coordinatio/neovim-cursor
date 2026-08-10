@@ -76,7 +76,7 @@ EOF
 2. **Fullscreen Toggle**: Press `<A-=>` in normal mode
    - Shows terminal in the current window (no split — ideal for small screens)
    - Press again to switch back to your file
-3. **Create New Terminal**: Press `<leader>an` to create additional sessions
+3. **Create New Terminal**: Press `<leader>an` to create an additional session (sends the current file if it has content)
 4. **Create New Fullscreen Terminal**: Press `<leader>aN` to create in fullscreen mode
 5. **Send File to Fullscreen**: Press `<leader>aE` to send current file contents to the terminal and force fullscreen
 6. **Switch Terminals**: Press `<F6>` to open a fuzzy picker with live preview
@@ -92,8 +92,8 @@ Work with multiple terminal sessions for different tasks:
 |------------|--------|
 | ``<A-\`>`` | Smart toggle — create first terminal or show last active (split) |
 | `<A-=>` | Fullscreen toggle — show terminal fullscreen or switch back to file |
-| `<leader>an` | Create new terminal with custom prompt |
-| `<leader>aN` | Create new terminal in fullscreen |
+| `<leader>an` | Create new terminal; send current file if non-empty |
+| `<leader>aN` | Create new terminal fullscreen; send current file if non-empty |
 | `<F6>` | Select terminal from fuzzy picker (with live preview) |
 | `<leader>ar` | Rename current terminal |
 | `<leader>ah` | Create new prompt file in `.nvim-yapt/history/` (timestamp in filename) |
@@ -141,12 +141,13 @@ Create a markdown file for your CLI task and send it in one go:
    - Creates `${CWD}/.nvim-yapt/history/` if needed
    - Opens a new file named like `2025-02-04_14-30-45.md` (date and time to the second)
 2. **Write your prompt** in the opened buffer (what you want the CLI to do).
-3. **Send to terminal**: `:PTSend` or `<leader>ae`
+3. **Send to terminal**: `:PTSend` / `<leader>ae` (reuse last session), or `:PTNew` / `<leader>an` (always a new session)
    - Saves the buffer if modified
    - Shows/creates the terminal and sends the current buffer contents directly
    - If current buffer is a prompt file created by `<leader>ah`, it is closed after successful send
-   - If current buffer is an unnamed/new file (e.g. a fresh `:enew` buffer) with content, a prompt-history file is created automatically (timestamped, in `.nvim-yapt/history/`), the content is saved into it, and it is then treated like a prompt file — closed after a successful send. An empty unnamed buffer aborts with a warning instead.
+   - If current buffer is an unnamed/new file (e.g. a fresh `:enew` buffer) with content, a prompt-history file is created automatically (timestamped, in `.nvim-yapt/history/`), the content is saved into it, and it is then treated like a prompt file — closed after a successful send. An empty buffer (named or unnamed) aborts with a warning for `:PTSend` / `<leader>ae`; `:PTNew` / `<leader>an` still creates a terminal without sending.
    - If no file buffers remain, opens an empty buffer
+   - Fullscreen variants: `:PTSendFullscreen` / `<leader>aE`, `:PTNewFullscreen` / `<leader>aN`
 
 Prompt-file buffers are automatically saved to disk when you leave them (switch buffer, close window, open the picker, etc.), so they appear in `:PTHistory` and `:PTLast` without a manual `:write`. Disable with `history.autosave = false`.
 
@@ -165,8 +166,8 @@ Prompt-file buffers are automatically saved to disk when you leave them (switch 
 |---------|--------|
 | `:PTT` | Toggle terminal (split mode) |
 | `:PTFullscreen` | Toggle terminal (fullscreen mode) |
-| `:PTNew [prompt]` | Create new terminal with optional initial prompt |
-| `:PTNewFullscreen` | Create new terminal in fullscreen |
+| `:PTNew [name]` | Create new terminal (optional name); send current file if non-empty |
+| `:PTNewFullscreen [name]` | Create new terminal fullscreen (optional name); send current file if non-empty |
 | `:PTSelect` | Open terminal picker |
 | `:PTRename [name]` | Rename active terminal (interactive if no argument) |
 | `:PTList` | List all terminals with status |
@@ -202,8 +203,8 @@ require("yapt").setup({
   keybindings = {
     toggle                = "<A-`>",      -- Toggle terminal in split
     toggle_fullscreen      = "<A-=>",     -- Toggle terminal fullscreen
-    new                    = "<leader>an", -- Create new terminal
-    new_fullscreen         = "<leader>aN", -- Create new terminal in fullscreen
+    new                    = "<leader>an", -- Create new terminal; send file if non-empty
+    new_fullscreen         = "<leader>aN", -- Create new terminal fullscreen; send file if non-empty
     select                 = "<F6>",       -- Select terminal (fuzzy picker)
     rename                 = "<leader>ar", -- Rename current terminal
     prompt_new             = "<leader>ah", -- Create new prompt file
@@ -353,7 +354,7 @@ print("Version: " .. yapt.version)
 -- Toggle terminal
 yapt.normal_mode_handler()
 
--- Create new terminal programmatically
+-- Create new terminal (sends current file if non-empty)
 yapt.new_terminal_handler()
 
 -- Send text to active terminal
@@ -444,7 +445,7 @@ Without Telescope, the picker falls back to `vim.ui.select`. The history command
 
 ### "Current buffer is empty — nothing to send"
 
-- Shown when running `:PTSend` / `<leader>ae` on an unnamed buffer with no content. Type something first, or send from a saved file.
+- Shown when running `:PTSend` / `<leader>ae` (or fullscreen variants) on an empty buffer — named or unnamed. Type something first.
 - Unnamed buffers *with* content no longer need to be saved manually — a history file is created for them automatically.
 
 ---

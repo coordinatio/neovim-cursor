@@ -11,8 +11,8 @@
 -- - fullscreen_toggle_handler(): Smart toggle in fullscreen mode
 -- - visual_mode_handler():       Toggle (split) and send selection
 -- - visual_fullscreen_mode_handler(): Toggle (fullscreen) and send selection
--- - new_terminal_handler():      Create new terminal in split
--- - new_fullscreen_handler():    Create new terminal in fullscreen
+-- - new_terminal_handler():      Create new terminal in split (send file if non-empty)
+-- - new_fullscreen_handler():    Create new terminal in fullscreen (send file if non-empty)
 -- - select_terminal_handler():   Open fuzzy picker to select terminal
 -- - rename_terminal_handler():   Rename active terminal
 --
@@ -144,17 +144,11 @@ function M.visual_fullscreen_mode_handler()
 end
 
 function M.new_terminal_handler()
-  picker.pick_command(config, function(cmd)
-    if not cmd then return end
-    tabs.create_terminal(nil, config, cmd, "split")
-  end)
+  history.create_terminal_maybe_send(config, { display_mode = "split" })
 end
 
 function M.new_fullscreen_handler()
-  picker.pick_command(config, function(cmd)
-    if not cmd then return end
-    tabs.create_terminal(nil, config, cmd, "fullscreen")
-  end)
+  history.create_terminal_maybe_send(config, { display_mode = "fullscreen" })
 end
 
 -- Display mode of the focused YAPT terminal (not "any fullscreen in this tab").
@@ -426,14 +420,6 @@ local function set_n(lhs, rhs, desc)
   vim.keymap.set("n", lhs, rhs, { desc = desc, silent = true })
 end
 
-local function warn_deprecated_prompt_send_new()
-  util.notify(
-    "PTPromptSendNew / keybindings.prompt_send_new is deprecated. " ..
-    "Create a new terminal with PTNew, then use PTSend.",
-    vim.log.levels.WARN
-  )
-end
-
 function M.setup(user_config)
   config = config_module.setup(user_config)
 
@@ -464,8 +450,8 @@ function M.setup(user_config)
     })
   end
 
-  set_n(keybindings.new, M.new_terminal_handler, "Create new YAPT terminal")
-  set_n(keybindings.new_fullscreen, M.new_fullscreen_handler, "Create new YAPT terminal in fullscreen")
+  set_n(keybindings.new, M.new_terminal_handler, "Create new YAPT terminal (send file if non-empty)")
+  set_n(keybindings.new_fullscreen, M.new_fullscreen_handler, "Create new YAPT terminal fullscreen (send file if non-empty)")
   set_n(keybindings.select, M.select_terminal_handler, "Select YAPT terminal")
   set_n(keybindings.rename, M.rename_terminal_handler, "Rename YAPT terminal")
 
@@ -485,13 +471,6 @@ function M.setup(user_config)
     set_n(keybindings.prompt_send_fullscreen, function()
       history.send_prompt_file_to_terminal_fullscreen(config)
     end, "Send current file contents to YAPT terminal (fullscreen)")
-  end
-
-  if keybindings.prompt_send_new and keybindings.prompt_send_new ~= "" then
-    set_n(keybindings.prompt_send_new, function()
-      warn_deprecated_prompt_send_new()
-      history.send_prompt_file_to_new_terminal(config)
-    end, "Deprecated: send current file contents to new YAPT terminal")
   end
 
   if keybindings.prompt_history_telescope and keybindings.prompt_history_telescope ~= "" then
@@ -528,18 +507,19 @@ function M.setup(user_config)
 
   vim.api.nvim_create_user_command("PTNew", function(opts)
     local name = opts.args and opts.args ~= "" and opts.args or nil
-    picker.pick_command(config, function(cmd)
-      if not cmd then return end
-      tabs.create_terminal(name, config, cmd, "split")
-    end)
+    history.create_terminal_maybe_send(config, { display_mode = "split", name = name })
   end, {
-    desc = "Create new YAPT terminal",
+    desc = "Create new YAPT terminal; send current file if non-empty",
     nargs = "?",
   })
 
-  vim.api.nvim_create_user_command("PTNewFullscreen", function()
-    M.new_fullscreen_handler()
-  end, { desc = "Create new YAPT terminal in fullscreen" })
+  vim.api.nvim_create_user_command("PTNewFullscreen", function(opts)
+    local name = opts.args and opts.args ~= "" and opts.args or nil
+    history.create_terminal_maybe_send(config, { display_mode = "fullscreen", name = name })
+  end, {
+    desc = "Create new YAPT terminal fullscreen; send current file if non-empty",
+    nargs = "?",
+  })
 
   vim.api.nvim_create_user_command("PTSelect", function()
     M.select_terminal_handler()
@@ -579,12 +559,6 @@ function M.setup(user_config)
   vim.api.nvim_create_user_command("PTSendFullscreen", function()
     history.send_prompt_file_to_terminal_fullscreen(config)
   end, { desc = "Send current file contents to YAPT terminal (force fullscreen)" })
-
-  -- Deprecated: create new terminal and send current file contents
-  vim.api.nvim_create_user_command("PTSendNew", function()
-    warn_deprecated_prompt_send_new()
-    history.send_prompt_file_to_new_terminal(config)
-  end, { desc = "Deprecated: create new YAPT terminal and send current file contents" })
 
   vim.api.nvim_create_user_command("PTHistory", function()
     history.open_history_in_telescope(config)
