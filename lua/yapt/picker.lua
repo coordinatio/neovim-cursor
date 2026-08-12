@@ -156,6 +156,16 @@ local function format_terminal_display(term)
   return string.format("%s %s (%s, %s)", status_icon, term.name, status_text, age_str)
 end
 
+-- Toggle target in an MRU-sorted list: previous when current is first, else first.
+-- Used so F6+Enter switches between the last two terminals.
+local function toggle_selection_index(terminals)
+  local current_id = terminal.id_for_buf() or tabs.get_active() or tabs.get_last()
+  if current_id and terminals[1] and terminals[1].id == current_id and terminals[2] then
+    return 2
+  end
+  return 1
+end
+
 -- Pick terminal using Telescope (if available)
 -- @param terminals Array of terminal metadata
 -- @param config Configuration object
@@ -212,6 +222,9 @@ local function pick_with_telescope(terminals, config, callback)
 
   pickers.new({}, {
     prompt_title = "Select Terminal",
+    default_selection_index = toggle_selection_index(terminals),
+    -- Keep preselect on empty prompt; follow best match while filtering.
+    selection_strategy = "closest",
     finder = finders.new_table({
       results = entries,
       entry_maker = function(entry)
@@ -307,9 +320,17 @@ local function pick_with_ui_select(terminals, callback)
   local items = {}
   local id_map = {}
 
-  for i, term in ipairs(terminals) do
-    items[i] = format_terminal_display(term)
-    id_map[i] = term.id
+  -- vim.ui.select always starts on the first item: put the toggle target first.
+  local prefer = toggle_selection_index(terminals)
+  local order = { prefer }
+  for i = 1, #terminals do
+    if i ~= prefer then
+      order[#order + 1] = i
+    end
+  end
+  for new_i, old_i in ipairs(order) do
+    items[new_i] = format_terminal_display(terminals[old_i])
+    id_map[new_i] = terminals[old_i].id
   end
 
   vim.ui.select(items, {
