@@ -192,6 +192,19 @@ local function with_hiding_terminal(fn)
   end
 end
 
+-- Suppress WinEnter view restore while apply_ui_state focuses the window
+-- (avoids a nested restore that would defeat restore_view = false).
+local applying_ui_state = false
+
+local function with_applying_ui_state(fn)
+  applying_ui_state = true
+  local ok, err = pcall(fn)
+  applying_ui_state = false
+  if not ok then
+    error(err)
+  end
+end
+
 -- Capture winsaveview from any valid window (including other tabpages).
 local function capture_view(win)
   if not win or not vim.api.nvim_win_is_valid(win) then
@@ -220,6 +233,150 @@ local function save_ui_state(id, mode_override)
   end
 end
 
+local function clamp_view(view, buf)
+  local last = vim.api.nvim_buf_line_count(buf)
+  local clamped = vim.deepcopy(view)
+  clamped.lnum = math.max(1, math.min(clamped.lnum or last, last))
+  clamped.col = math.max(0, clamped.col or 0)
+  local line = vim.api.nvim_buf_get_lines(buf, clamped.lnum - 1, clamped.lnum, false)[1] or ""
+  clamped.col = math.min(clamped.col, #line)
+  return clamped
+end
+
+-- Clamp lnum/col to the buffer, then winrestview. No-op when gen is stale or
+-- win gone. Returns the clamped view that was applied (or nil).
+local function restore_normal_view(term, view, gen)
+  if not view or not term or not is_win_displayed(term.win) then
+    return nil
+  end
+  if gen and term._ui_apply_gen ~= gen then
+    return nil
+  end
+  local clamped
+  vim.api.nvim_win_call(term.win, function()
+    -- Late BufEnter startinsert may have put us back in job mode; leave it
+    -- before restoring or the terminal job cursor wins.
+    if vim.api.nvim_get_mode().mode == "t" then
+      vim.cmd("stopinsert")
+    end
+    clamped = clamp_view(view, 0)
+    pcall(vim.fn.winrestview, clamped)
+  end)
+  return clamped
+end
+
+-- True while apply_ui_state owns focus/restore for this terminal. Blocks
+-- deferred WinEnter restores from show()/set_current_win (including the
+-- restore_view = false picker/refocus paths).
+local function suppress_winenter_restore(term)
+  return term._suppress_winenter_restore == true
+end
+
+local function begin_ui_apply(term)
+  term._suppress_winenter_restore = true
+  term._ui_apply_pending = true
+  term._ui_apply_gen = (term._ui_apply_gen or 0) + 1
+  return term._ui_apply_gen
+end
+
+local function finish_ui_apply(term, gen)
+  if term._ui_apply_gen ~= gen then
+    return
+  end
+  if term._view_restore_gen == gen then
+    term._view_restore_gen = nil
+  end
+  term._ui_apply_pending = false
+  term._suppress_winenter_restore = false
+end
+
+-- Remount can fire BufEnter/startinsert/TermEnter and clobber ui_state before
+-- apply_ui_state runs. Snapshot mode/view onto the term so apply can re-apply
+-- the intent even if TermEnter races between show and apply.
+local function with_preserved_ui_intent(term, fn)
+  local ui = ensure_ui_state(term)
+  local mode = ui.mode
+  local view = ui.view and vim.deepcopy(ui.view) or nil
+  term._suppress_winenter_restore = true
+  term._preserved_ui = { mode = mode, view = view }
+  local ok, err = pcall(fn)
+  if term.ui_state then
+    term.ui_state.mode = mode
+    if view then
+      term.ui_state.view = view
+    end
+  end
+  -- Keep suppress until apply finishes. Bare M.show clears on next tick.
+  vim.schedule(function()
+    if term._preserved_ui then
+      term._preserved_ui = nil
+    end
+    if not term._ui_apply_pending then
+      term._suppress_winenter_restore = false
+    end
+  end)
+  if not ok then
+    error(err)
+  end
+end
+
+-- If show() stashed intent, re-apply it before reading mode/view for restore.
+local function take_preserved_ui(term)
+  local pending = term._preserved_ui
+  term._preserved_ui = nil
+  if not pending or not term.ui_state then
+    return
+  end
+  if pending.mode == "t" or pending.mode == "n" then
+    term.ui_state.mode = pending.mode
+  end
+  if pending.view then
+    term.ui_state.view = pending.view
+  end
+end
+
+-- Re-assert normal-mode view across remount/resize/startinsert races.
+-- Retries beat deferred BufEnter startinsert and SIGWINCH redraws.
+local function schedule_normal_view_restore(term, view, gen)
+  term._view_restore_gen = gen
+  local delays_ms = { 0, 20, 50, 120 }
+  local remaining = #delays_ms
+
+  local function apply_once()
+    if term._ui_apply_gen ~= gen or not is_win_displayed(term.win) then
+      return false
+    end
+    local ok, err = pcall(function()
+      with_applying_ui_state(function()
+        vim.api.nvim_set_current_win(term.win)
+        local applied = restore_normal_view(term, view, gen)
+        if term._ui_apply_gen == gen and term.ui_state then
+          term.ui_state.mode = "n"
+          if applied then
+            term.ui_state.view = applied
+          end
+        end
+      end)
+    end)
+    if not ok then
+      error(err)
+    end
+    return true
+  end
+
+  for _, delay in ipairs(delays_ms) do
+    vim.defer_fn(function()
+      remaining = remaining - 1
+      if term._ui_apply_gen == gen then
+        apply_once()
+      end
+      if remaining <= 0 then
+        finish_ui_apply(term, gen)
+      end
+    end, delay)
+  end
+end
+
 -- Restore or force-insert after a terminal window is shown.
 -- opts.force_insert: always enter terminal-job mode (send/paste paths).
 -- opts.restore_view: when restoring normal mode, apply winsaveview (default true).
@@ -232,6 +389,9 @@ local function apply_ui_state(id, opts)
     return
   end
 
+  -- Re-apply intent saved around show()/set_buf before TermEnter can stick.
+  take_preserved_ui(term)
+
   local force_insert = opts.force_insert == true
   local restore_view = opts.restore_view ~= false
   local ui = term.ui_state
@@ -239,34 +399,64 @@ local function apply_ui_state(id, opts)
   -- Snapshot before stopinsert: TermLeave may rewrite the live ui_state table.
   local view = ui and ui.view or nil
 
-  -- Invalidate any previously scheduled apply for this terminal.
-  term._ui_apply_gen = (term._ui_apply_gen or 0) + 1
-  local gen = term._ui_apply_gen
+  local gen = begin_ui_apply(term)
+  -- Block TermEnter from flipping ui.mode to "t" for the whole apply
+  -- (common race: user autocmd BufEnter term://* startinsert during show).
+  if restore_normal then
+    term._view_restore_gen = gen
+  end
 
-  vim.api.nvim_set_current_win(term.win)
+  with_applying_ui_state(function()
+    vim.api.nvim_set_current_win(term.win)
+  end)
   vim.schedule(function()
     if term._ui_apply_gen ~= gen or not is_win_displayed(term.win) then
+      finish_ui_apply(term, gen)
       return
     end
-    vim.api.nvim_set_current_win(term.win)
-    if restore_normal then
-      vim.cmd("stopinsert")
-      if restore_view and view then
-        vim.api.nvim_win_call(term.win, function()
-          pcall(vim.fn.winrestview, view)
-        end)
-      end
-      return
-    end
-    -- Jump to the end first — startinsert does nothing useful in scrollback.
-    -- Skip when refocusing an already-visible window (restore_view == false).
-    if restore_view then
-      vim.api.nvim_win_call(term.win, function()
-        local last = vim.api.nvim_buf_line_count(0)
-        pcall(vim.api.nvim_win_set_cursor, 0, { last, 0 })
+
+    local pending_view_restore = false
+    local ok, err = pcall(function()
+      with_applying_ui_state(function()
+        vim.api.nvim_set_current_win(term.win)
+        if restore_normal then
+          -- Only leave job mode when needed (avoids a spurious TermLeave rewrite).
+          local left_job = vim.api.nvim_get_mode().mode == "t"
+          if restore_view and view then
+            if left_job then
+              vim.cmd("stopinsert")
+            end
+            -- Always defer: set_buf / new splits jump to EOF before layout settles.
+            schedule_normal_view_restore(term, view, gen)
+            pending_view_restore = true
+            return
+          end
+          if left_job then
+            vim.cmd("stopinsert")
+          end
+          if term.ui_state then
+            term.ui_state.mode = "n"
+          end
+          return
+        end
+        -- Jump to the end first — startinsert does nothing useful in scrollback.
+        -- Skip when refocusing an already-visible window (restore_view == false).
+        if restore_view then
+          vim.api.nvim_win_call(term.win, function()
+            local last = vim.api.nvim_buf_line_count(0)
+            pcall(vim.api.nvim_win_set_cursor, 0, { last, 0 })
+          end)
+        end
+        vim.cmd("startinsert")
       end)
+    end)
+
+    if not pending_view_restore then
+      finish_ui_apply(term, gen)
     end
-    vim.cmd("startinsert")
+    if not ok then
+      error(err)
+    end
   end)
 end
 
@@ -366,7 +556,9 @@ local function show_fullscreen(id)
   fullscreen_state.terminal_id = id
   fullscreen_state.active = true
 
-  vim.api.nvim_win_set_buf(current_win, term.buf)
+  with_preserved_ui_intent(term, function()
+    vim.api.nvim_win_set_buf(current_win, term.buf)
+  end)
   term.win = current_win
   term.display_mode = "fullscreen"
   active_id = id
@@ -507,7 +699,9 @@ local function open_split_window(term, config)
 
   vim.cmd(split_cmd)
   term.win = vim.api.nvim_get_current_win()
-  vim.api.nvim_win_set_buf(term.win, term.buf)
+  with_preserved_ui_intent(term, function()
+    vim.api.nvim_win_set_buf(term.win, term.buf)
+  end)
   apply_split_size(term.win, config)
 end
 
@@ -528,7 +722,9 @@ local function reuse_split_window(term, config)
     return false
   end
   if is_win_displayed(term.win) then
-    vim.api.nvim_set_current_win(term.win)
+    with_preserved_ui_intent(term, function()
+      vim.api.nvim_set_current_win(term.win)
+    end)
     return true
   end
 
@@ -538,11 +734,13 @@ local function reuse_split_window(term, config)
     win = vim.api.nvim_get_current_win(),
   })
   if ok and is_win_displayed(term.win) then
-    if vim.api.nvim_win_get_buf(term.win) ~= term.buf then
-      vim.api.nvim_win_set_buf(term.win, term.buf)
-    end
+    with_preserved_ui_intent(term, function()
+      if vim.api.nvim_win_get_buf(term.win) ~= term.buf then
+        vim.api.nvim_win_set_buf(term.win, term.buf)
+      end
+      vim.api.nvim_set_current_win(term.win)
+    end)
     apply_split_size(term.win, config)
-    vim.api.nvim_set_current_win(term.win)
     return true
   end
 
@@ -706,9 +904,57 @@ local function create_terminal_instance(id, config, command, display_mode)
   vim.api.nvim_create_autocmd("TermEnter", {
     buffer = term.buf,
     callback = function()
+      if hiding_terminal or applying_ui_state then
+        return
+      end
       local t = terminals[id]
-      if t then
+      if not t or suppress_winenter_restore(t) then
+        return
+      end
+      -- Do not clobber a pending normal-mode restore (show→apply race with
+      -- user BufEnter startinsert autocmds).
+      if t._view_restore_gen then
+        return
+      end
+      ensure_ui_state(t).mode = "t"
+    end,
+  })
+
+  -- ModeChanged tracks t↔n more reliably than TermLeave alone, and rejects
+  -- deferred BufEnter startinsert while a normal-mode view restore is pending.
+  vim.api.nvim_create_autocmd("ModeChanged", {
+    buffer = term.buf,
+    callback = function()
+      local t = terminals[id]
+      if not t or hiding_terminal then
+        return
+      end
+      local mode = vim.api.nvim_get_mode().mode
+      if t._view_restore_gen then
+        if mode == "t" then
+          vim.schedule(function()
+            local cur = terminals[id]
+            if not cur or not cur._view_restore_gen then
+              return
+            end
+            if vim.api.nvim_get_mode().mode == "t" then
+              vim.cmd("stopinsert")
+            end
+          end)
+        end
+        return
+      end
+      if applying_ui_state or suppress_winenter_restore(t) then
+        return
+      end
+      if mode == "t" then
         ensure_ui_state(t).mode = "t"
+      elseif mode ~= "c" and not mode:match("^[itR]") then
+        ensure_ui_state(t).mode = "n"
+        local view = capture_view(t.win)
+        if view then
+          t.ui_state.view = view
+        end
       end
     end,
   })
@@ -723,11 +969,104 @@ local function create_terminal_instance(id, config, command, display_mode)
       -- Defer: distinguish intentional stopinsert / <C-\><C-n> (still on this
       -- buffer) from focus leaving the window (keep prior mode, usually "t").
       vim.schedule(function()
-        if hiding_terminal or not terminals[id] then
+        if hiding_terminal or applying_ui_state or not terminals[id] then
+          return
+        end
+        local t = terminals[id]
+        -- Nested post-stopinsert view restore still pending: skip so we do not
+        -- clobber ui.view with an intermediate layout.
+        if t._view_restore_gen then
           return
         end
         if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_get_current_buf() == buf then
           save_ui_state(id, "n")
+        end
+      end)
+    end,
+  })
+
+  -- Keep ui.view fresh while scrolling in normal mode.
+  vim.api.nvim_create_autocmd({ "CursorMoved", "WinScrolled" }, {
+    buffer = term.buf,
+    callback = function()
+      if hiding_terminal or applying_ui_state then
+        return
+      end
+      local t = terminals[id]
+      if not t or not t.ui_state or t.ui_state.mode ~= "n" then
+        return
+      end
+      if t._view_restore_gen or suppress_winenter_restore(t) then
+        return
+      end
+      local view = capture_view(t.win)
+      if view then
+        t.ui_state.view = view
+      end
+    end,
+  })
+
+  -- Snapshot scroll when leaving a terminal already in normal mode (<C-w>,
+  -- click, etc.). Do not force mode to "n": TermLeave owns t→n only while
+  -- focus remains on the buffer; leaving job mode must keep ui_state "t".
+  vim.api.nvim_create_autocmd("WinLeave", {
+    buffer = term.buf,
+    callback = function()
+      if hiding_terminal then
+        return
+      end
+      local t = terminals[id]
+      if not t or not t.ui_state or t.ui_state.mode ~= "n" then
+        return
+      end
+      local view = capture_view(t.win)
+      if view then
+        t.ui_state.view = view
+      end
+    end,
+  })
+
+  -- Restore snapshotted scroll when returning to a terminal left in normal
+  -- mode. Deferred so terminal set_buf / focus can settle; skipped while
+  -- apply_ui_state owns restore (picker/rename/same-term restore_view=false).
+  vim.api.nvim_create_autocmd("WinEnter", {
+    buffer = term.buf,
+    callback = function()
+      if hiding_terminal or applying_ui_state then
+        return
+      end
+      local t = terminals[id]
+      if not t or not t.ui_state or t.ui_state.mode ~= "n" then
+        return
+      end
+      if suppress_winenter_restore(t) then
+        return
+      end
+      if not is_win_displayed(t.win) or t.win ~= vim.api.nvim_get_current_win() then
+        return
+      end
+      local win = t.win
+      local view = t.ui_state.view
+      vim.schedule(function()
+        local cur = terminals[id]
+        if hiding_terminal or applying_ui_state or not cur then
+          return
+        end
+        if suppress_winenter_restore(cur) then
+          return
+        end
+        if not cur.ui_state or cur.ui_state.mode ~= "n" then
+          return
+        end
+        if cur.win ~= win or not is_win_displayed(cur.win) then
+          return
+        end
+        if vim.api.nvim_get_current_win() ~= cur.win then
+          return
+        end
+        local applied = restore_normal_view(cur, view or cur.ui_state.view, nil)
+        if applied and cur.ui_state then
+          cur.ui_state.view = applied
         end
       end)
     end,
@@ -875,7 +1214,13 @@ function M.toggle_fullscreen(config, id, command, apply_opts)
 
   if fullscreen_state.active and fullscreen_state.terminal_id == id then
     if is_visible(id) then
-      hide_fullscreen()
+      local mode_override = nil
+      local term = get_terminal(id)
+      if term and term.buf and vim.api.nvim_get_current_buf() == term.buf then
+        local m = vim.api.nvim_get_mode().mode
+        mode_override = (m == "t") and "t" or "n"
+      end
+      hide_fullscreen(mode_override)
     else
       rehome_fullscreen(id, apply_opts)
     end
