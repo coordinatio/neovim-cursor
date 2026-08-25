@@ -223,6 +223,8 @@ require("yapt").setup({
   terminal = {
     default_name = "Term",     -- Name prefix
     auto_number  = true,       -- Auto-append numbers (Term 1, Term 2, etc.)
+    -- Strip trailing spaces from cell-grid padding on yank (also removes intentional ones)
+    trim_yank_trailing_whitespace = true,
   },
 
   split = {

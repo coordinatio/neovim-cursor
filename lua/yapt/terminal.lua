@@ -788,6 +788,68 @@ function M.show_fullscreen(id)
   return show_fullscreen(id)
 end
 
+-- Strip trailing spaces from yanked lines and write back to the register.
+-- Targets terminal cell-grid padding (spaces), not generic whitespace / hard-wrap.
+-- Also syncs clipboard registers when 'clipboard' mirrors the unnamed register.
+local function apply_trimmed_yank_register()
+  if vim.v.event.operator ~= "y" then
+    return
+  end
+  local lines = vim.v.event.regcontents
+  if type(lines) ~= "table" then
+    return
+  end
+  local trimmed = {}
+  local changed = false
+  local max_width = 0
+  for i, line in ipairs(lines) do
+    local t = line:gsub(" +$", "")
+    trimmed[i] = t
+    if t ~= line then
+      changed = true
+    end
+    local w = vim.fn.strdisplaywidth(t)
+    if w > max_width then
+      max_width = w
+    end
+  end
+  if not changed then
+    return
+  end
+  local original_reg = vim.v.event.regname
+  local reg = original_reg
+  if reg == "" then
+    reg = '"'
+  else
+    -- Uppercase means append-mode yank; setreg with uppercase appends again.
+    reg = reg:lower()
+  end
+  local regtype = vim.v.event.regtype
+  -- Blockwise paste re-pads to the stored width; update it after trim.
+  if type(regtype) == "string" and regtype:sub(1, 1) == "\022" then
+    regtype = "\022" .. max_width
+  end
+
+  vim.fn.setreg(reg, trimmed, regtype)
+  -- Named/clipboard yanks also update unnamed; set it explicitly after trim.
+  if reg ~= '"' then
+    vim.fn.setreg('"', trimmed, regtype)
+  end
+
+  -- Mirror clipboard only for unnamed yanks (Neovim already set +/* for "+y/*y).
+  if original_reg == "" or original_reg == '"' then
+    local clipboard = vim.o.clipboard
+    local has_unnamedplus = clipboard:find("unnamedplus", 1, true) ~= nil
+    local has_unnamed = clipboard:gsub("unnamedplus", ""):find("unnamed", 1, true) ~= nil
+    if has_unnamedplus then
+      vim.fn.setreg("+", trimmed, regtype)
+    end
+    if has_unnamed then
+      vim.fn.setreg("*", trimmed, regtype)
+    end
+  end
+end
+
 -- Create a new terminal instance (reusable function for creating terminals).
 -- @param id string Terminal ID
 -- @param config table Plugin config
@@ -898,6 +960,14 @@ local function create_terminal_instance(id, config, command, display_mode)
       noremap = true,
       silent = true,
       desc = "Hide terminal window"
+    })
+  end
+
+  local term_cfg = config.terminal or {}
+  if term_cfg.trim_yank_trailing_whitespace ~= false then
+    vim.api.nvim_create_autocmd("TextYankPost", {
+      buffer = term.buf,
+      callback = apply_trimmed_yank_register,
     })
   end
 

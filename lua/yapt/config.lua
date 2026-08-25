@@ -33,6 +33,9 @@ M.defaults = {
   terminal = {
     default_name = "Term",      -- Default name prefix for terminals
     auto_number = true,          -- Auto-append numbers (Term 1, Term 2, etc.)
+    -- Strip trailing spaces from each line when yanking from a yapt terminal.
+    -- Targets cell-grid padding (not hard-wrap); also removes intentional trailing spaces.
+    trim_yank_trailing_whitespace = true,
   },
 
   -- Terminal split configuration
