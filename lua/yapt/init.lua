@@ -64,11 +64,8 @@ end
 
 -- Build the @file:start-end link for the most recent visual selection.
 local function visual_selection_link()
-  local buf = vim.api.nvim_get_current_buf()
-  local filepath = vim.api.nvim_buf_get_name(buf)
-  local start_line = vim.fn.getpos("'<")[2]
-  local end_line = vim.fn.getpos("'>")[2]
-  return "@" .. filepath .. ":" .. start_line .. "-" .. end_line
+  local loc = util.resolve_range_location(vim.fn.getpos("'<")[2], vim.fn.getpos("'>")[2])
+  return "@" .. loc.path .. ":" .. loc.line1 .. "-" .. loc.line2
 end
 
 -- Send `text` to the currently active terminal after a delay.
@@ -397,17 +394,13 @@ local function copy_file_link_to_clipboard(filepath)
 end
 
 function M.copy_file_link_handler()
-  local buf = vim.api.nvim_get_current_buf()
-  local filepath = vim.api.nvim_buf_get_name(buf)
-  copy_file_link_to_clipboard(filepath)
+  local loc = util.resolve_file_location()
+  copy_file_link_to_clipboard(loc.path)
 end
 
 function M.copy_link_handler()
-  local buf = vim.api.nvim_get_current_buf()
-  local filepath = vim.api.nvim_buf_get_name(buf)
-  local start_line = vim.fn.getpos("'<")[2]
-  local end_line = vim.fn.getpos("'>")[2]
-  copy_range_link_to_clipboard(filepath, start_line, end_line)
+  local loc = util.resolve_range_location(vim.fn.getpos("'<")[2], vim.fn.getpos("'>")[2])
+  copy_range_link_to_clipboard(loc.path, loc.line1, loc.line2)
 end
 
 ------------------------------------------------------------
@@ -569,11 +562,10 @@ function M.setup(user_config)
   end, { desc = "Open or switch to last prompt file from history" })
 
   vim.api.nvim_create_user_command("PTCopyLink", function(opts)
-    local buf = vim.api.nvim_get_current_buf()
-    local filepath = vim.api.nvim_buf_get_name(buf)
-    local line1 = opts.line1 or vim.api.nvim_win_get_cursor(0)[1]
-    local line2 = opts.line2 or line1
-    copy_range_link_to_clipboard(filepath, line1, line2)
+    local view_line1 = opts.line1 or vim.api.nvim_win_get_cursor(0)[1]
+    local view_line2 = opts.line2 or view_line1
+    local loc = util.resolve_range_location(view_line1, view_line2)
+    copy_range_link_to_clipboard(loc.path, loc.line1, loc.line2)
   end, {
     desc = "Copy @file:start-end link to clipboard (for prompt); range or current line",
     range = true,

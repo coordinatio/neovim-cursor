@@ -99,4 +99,279 @@ function M.find_or_create_restore_buffer(exclude_buf, should_skip)
   return vim.api.nvim_create_buf(true, false)
 end
 
+-- Soft-depend on markdown-table-wrap without force-loading lazy plugins.
+-- Only consult modules that are already in package.loaded.
+local function loaded_mtw()
+  local mtw = package.loaded["markdown-table-wrap"]
+  if type(mtw) == "table" then
+    return mtw
+  end
+  return nil
+end
+
+local function loaded_mtw_reader()
+  local reader = package.loaded["markdown-table-wrap.reader"]
+  if type(reader) == "table" then
+    return reader
+  end
+  return nil
+end
+
+-- Resolve the canonical file buffer behind virtual views (e.g. markdown-table-wrap
+-- Reader / Float). Soft-depends on markdown-table-wrap: if the plugin is absent
+-- or unloaded, falls back to buffer vars / the view buffer itself.
+--
+-- Prefer cheap gates (buffer var, float ownership, reader marker) so ordinary
+-- Source buffers never pay for mtw.resolve_source_buffer → full context.resolve.
+-- @param bufnr integer|nil View buffer (0 / nil = current)
+-- @return { view_bufnr: integer, source_bufnr: integer, path: string }
+function M.resolve_file_location(bufnr)
+  if bufnr == nil or bufnr == 0 then
+    bufnr = vim.api.nvim_get_current_buf()
+  end
+
+  local source_bufnr = bufnr
+
+  -- Cheap: Reader buffer var (works even when mtw is unloaded).
+  local from_var = vim.b[bufnr].markdown_table_wrap_source
+  if from_var and vim.api.nvim_buf_is_valid(from_var) then
+    source_bufnr = from_var
+  end
+
+  -- Cheap: Float ownership via public mtw.state fields.
+  if source_bufnr == bufnr then
+    local mtw = loaded_mtw()
+    if mtw and type(mtw.state) == "table" then
+      local st = mtw.state
+      local float_src = st.float_source_bufnr
+      if st.buf == bufnr and float_src and vim.api.nvim_buf_is_valid(float_src) then
+        source_bufnr = float_src
+      end
+    end
+  end
+
+  -- Cheap: Reader module marker / source lookup (no context.resolve).
+  if source_bufnr == bufnr then
+    local reader = loaded_mtw_reader()
+    if reader and type(reader.is_reader) == "function" and reader.is_reader(bufnr) then
+      if type(reader.source_bufnr) == "function" then
+        local src = reader.source_bufnr(bufnr)
+        if src and vim.api.nvim_buf_is_valid(src) then
+          source_bufnr = src
+        end
+      end
+    end
+  end
+
+  -- Heavy fallback only when cheap gates hint at a virtual view but did not
+  -- settle a remapped Source. Ordinary Source (no markers / not float) skips it.
+  if source_bufnr == bufnr then
+    local mtw = loaded_mtw()
+    local looks_virtual = vim.b[bufnr].markdown_table_wrap_reader == true
+      or vim.b[bufnr].markdown_table_wrap_source ~= nil
+      or (mtw and type(mtw.state) == "table" and mtw.state.buf == bufnr)
+    if looks_virtual and mtw and type(mtw.resolve_source_buffer) == "function" then
+      local resolved = mtw.resolve_source_buffer(bufnr)
+      if resolved and vim.api.nvim_buf_is_valid(resolved) then
+        source_bufnr = resolved
+      end
+    end
+  end
+
+  return {
+    view_bufnr = bufnr,
+    source_bufnr = source_bufnr,
+    path = vim.api.nvim_buf_get_name(source_bufnr),
+  }
+end
+
+-- True when bufnr is the active markdown-table-wrap Float scratch, or is shown
+-- in any window with a non-empty `relative` config (editor/win/cursor float).
+-- Soft-dep only: never force-requires mtw.
+-- @param bufnr integer
+-- @return boolean
+function M.is_float_view(bufnr)
+  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+    return false
+  end
+
+  local mtw = loaded_mtw()
+  if mtw and type(mtw.state) == "table" and mtw.state.buf == bufnr then
+    return true
+  end
+
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == bufnr then
+      local cfg = vim.api.nvim_win_get_config(win)
+      if cfg.relative and cfg.relative ~= "" then
+        return true
+      end
+    end
+  end
+
+  return false
+end
+
+-- Tear down a float view. When the current window is the float, restore Source
+-- focus; otherwise leave the current window alone (e.g. terminal after send).
+-- mtw.close_preview is focus-scoped (can close Reader or pause/clear inline on
+-- the terminal), so owned floats are torn down by known identity via mtw.state
+-- win/buf/float_* fields only. Foreign floats: close windows showing bufnr.
+-- mtw state is cleared only after the float win is actually gone.
+-- Returns true only when the float is actually gone. Soft-dep via package.loaded.
+-- @param bufnr integer view buffer
+-- @return boolean
+function M.close_float_view_if_needed(bufnr)
+  if not M.is_float_view(bufnr) then
+    return false
+  end
+
+  local mtw = loaded_mtw()
+  local st = mtw and type(mtw.state) == "table" and mtw.state or nil
+  local is_mtw_float = st and st.buf == bufnr
+  local source_winid = is_mtw_float and st.float_source_winid or nil
+  local cur_win = vim.api.nvim_get_current_win()
+  local restore_source = false
+
+  if is_mtw_float then
+    -- Float-only teardown mirroring mtw's internal close_existing (not exported).
+    local float_win = st.win
+    if float_win and vim.api.nvim_win_is_valid(float_win) then
+      restore_source = (cur_win == float_win)
+      pcall(vim.api.nvim_win_close, float_win, true)
+    end
+
+    -- Only clear ownership after the float win is gone (or was already gone).
+    local win_gone = not float_win or not vim.api.nvim_win_is_valid(float_win)
+    if win_gone then
+      if st.buf and vim.api.nvim_buf_is_valid(st.buf) then
+        pcall(vim.api.nvim_buf_delete, st.buf, { force = true })
+      end
+      st.win = nil
+      st.buf = nil
+      st.float_source_bufnr = nil
+      st.float_source_winid = nil
+      st.float_source_alt_bufnr = nil
+      st.float_rendered = nil
+    end
+  else
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == bufnr then
+        local cfg = vim.api.nvim_win_get_config(win)
+        if cfg.relative and cfg.relative ~= "" then
+          pcall(vim.api.nvim_win_close, win, true)
+        end
+      end
+    end
+  end
+
+  if restore_source and source_winid and vim.api.nvim_win_is_valid(source_winid) then
+    pcall(vim.api.nvim_set_current_win, source_winid)
+  end
+
+  -- Success only when the float is actually gone (win closed / state cleared /
+  -- no longer detected as a float view).
+  return not M.is_float_view(bufnr)
+end
+
+-- Map a float view line to Source, clamping out-of-range indices to the
+-- nearest mapped edge (avoids falling back to start_lnum and inverting ranges).
+local function map_float_lnum(rendered, lnum)
+  local source_lnums = rendered.source_lnums
+  local mapped = source_lnums[lnum]
+  if mapped then
+    return mapped
+  end
+
+  local n = #source_lnums
+  if n > 0 then
+    if lnum < 1 then
+      return source_lnums[1]
+    end
+    return source_lnums[n]
+  end
+
+  return rendered.end_lnum or rendered.start_lnum or lnum
+end
+
+-- Map a view line using an optional prefetched Reader state (avoids a second
+-- get_state deepcopy when mapping a range). Float mapping stays cheap.
+-- @param view_bufnr integer
+-- @param lnum integer|nil
+-- @param reader_state table|nil already-fetched reader.get_state result (or nil)
+-- @return integer|nil
+local function map_line_to_source_with_state(view_bufnr, lnum, reader_state)
+  if lnum == nil then
+    return lnum
+  end
+
+  if reader_state and reader_state.reader_to_source then
+    return reader_state.reader_to_source[lnum] or lnum
+  end
+
+  local mtw = loaded_mtw()
+  if mtw and type(mtw.state) == "table" then
+    local st = mtw.state
+    local rendered = st.float_rendered
+    if st.buf == view_bufnr and rendered and rendered.source_lnums then
+      return map_float_lnum(rendered, lnum)
+    end
+  end
+
+  return lnum
+end
+
+-- Map a line number in a view buffer (Reader or Float) to the backing Source line.
+-- Without a loaded markdown-table-wrap mapping, returns lnum unchanged.
+-- @param view_bufnr integer|nil (0 / nil = current)
+-- @param lnum integer|nil
+-- @return integer|nil
+function M.map_line_to_source(view_bufnr, lnum)
+  if lnum == nil then
+    return lnum
+  end
+  if view_bufnr == nil or view_bufnr == 0 then
+    view_bufnr = vim.api.nvim_get_current_buf()
+  end
+
+  local reader_state = nil
+  local reader = loaded_mtw_reader()
+  if reader and type(reader.get_state) == "function" then
+    reader_state = reader.get_state(view_bufnr)
+  end
+
+  return map_line_to_source_with_state(view_bufnr, lnum, reader_state)
+end
+
+-- Resolve path + Source-mapped line range for clipboard / visual / :PTCopyLink.
+-- Prefetches Reader state once so both endpoints share a single get_state deepcopy.
+-- @param line1 integer View start line
+-- @param line2 integer|nil View end line (defaults to line1)
+-- @param bufnr integer|nil View buffer (0 / nil = current)
+-- @return { path: string, line1: integer, line2: integer, view_bufnr: integer, source_bufnr: integer }
+function M.resolve_range_location(line1, line2, bufnr)
+  local loc = M.resolve_file_location(bufnr)
+  local view_bufnr = loc.view_bufnr
+
+  local reader_state = nil
+  local reader = loaded_mtw_reader()
+  if reader and type(reader.get_state) == "function" then
+    reader_state = reader.get_state(view_bufnr)
+  end
+
+  local mapped1 = map_line_to_source_with_state(view_bufnr, line1, reader_state)
+  local mapped2 = map_line_to_source_with_state(view_bufnr, line2 or line1, reader_state)
+  -- Normalize so inverted float/reader edge maps never yield line1 > line2.
+  if mapped1 and mapped2 and mapped1 > mapped2 then
+    mapped1, mapped2 = mapped2, mapped1
+  end
+  return {
+    view_bufnr = loc.view_bufnr,
+    source_bufnr = loc.source_bufnr,
+    path = loc.path,
+    line1 = mapped1,
+    line2 = mapped2,
+  }
+end
+
 return M

@@ -181,48 +181,102 @@ end
 local function replace_prompt_in_open_windows(buf, replacement)
   for _, win in ipairs(vim.api.nvim_list_wins()) do
     if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == buf then
-      vim.api.nvim_win_set_buf(win, replacement)
+      local cfg = vim.api.nvim_win_get_config(win)
+      -- Never mount a normal buffer into a floating window (e.g. mtw Float).
+      if not (cfg.relative and cfg.relative ~= "") then
+        vim.api.nvim_win_set_buf(win, replacement)
+      end
     end
   end
 end
 
-local function close_sent_prompt_buffer_if_needed(buf, config)
-  if not is_plugin_prompt_file_buffer(buf, config) then
+-- Treat view_buf as live only while it still resolves to source_buf.
+-- Protects deferred close (~100–200ms after fullscreen prepare) from a
+-- recycled bufnr after float wipe / Reader abandon.
+-- @param source_buf integer
+-- @param view_buf integer|nil
+-- @return integer live view (or source_buf when stale / missing)
+local function live_view_for_source(source_buf, view_buf)
+  view_buf = view_buf or source_buf
+  if view_buf == source_buf then
+    return source_buf
+  end
+  if not vim.api.nvim_buf_is_valid(view_buf) then
+    return source_buf
+  end
+  if util.resolve_file_location(view_buf).source_bufnr == source_buf then
+    return view_buf
+  end
+  return source_buf
+end
+
+-- Swap view/source windows to `replacement`. Float views are torn down first
+-- (focus returns to Source); Reader/normal keep the view+source swap path.
+-- @param source_buf integer
+-- @param view_buf integer
+-- @param replacement integer
+local function swap_prompt_windows_for_view(source_buf, view_buf, replacement)
+  view_buf = live_view_for_source(source_buf, view_buf)
+  if util.close_float_view_if_needed(view_buf) then
+    replace_prompt_in_open_windows(source_buf, replacement)
     return
   end
+
+  replace_prompt_in_open_windows(view_buf, replacement)
+  if view_buf ~= source_buf then
+    replace_prompt_in_open_windows(source_buf, replacement)
+  end
+end
+
+-- Close/fullscreen window ops must target the visible buffer (view), while
+-- prompt identity and wipe use Source (real file behind Reader/Float).
+-- @param source_buf integer real file buffer
+-- @param config Plugin config
+-- @param view_buf integer|nil visible buffer (defaults to source_buf)
+local function close_sent_prompt_buffer_if_needed(source_buf, config, view_buf)
+  if not is_plugin_prompt_file_buffer(source_buf, config) then
+    return
+  end
+
+  view_buf = live_view_for_source(source_buf, view_buf)
 
   local skip_prompt = function(b)
     return is_plugin_prompt_file_buffer(b, config)
   end
 
-  local replacement = util.find_previous_buffer(buf, skip_prompt)
-    or util.find_file_buffer(buf, skip_prompt)
-    or util.find_empty_unnamed_buffer(buf)
+  local replacement = util.find_previous_buffer(source_buf, skip_prompt)
+    or util.find_file_buffer(source_buf, skip_prompt)
+    or util.find_empty_unnamed_buffer(source_buf)
 
   if not replacement then
     return
   end
 
-  replace_prompt_in_open_windows(buf, replacement)
+  swap_prompt_windows_for_view(source_buf, view_buf, replacement)
 
-  local ok, err = pcall(vim.api.nvim_buf_delete, buf, {})
+  local ok, err = pcall(vim.api.nvim_buf_delete, source_buf, {})
   if not ok then
     util.notify("Failed to close sent prompt buffer: " .. tostring(err), vim.log.levels.WARN)
     return
   end
 end
 
-local function prepare_prompt_buffer_for_fullscreen(buf, config)
-  if not is_plugin_prompt_file_buffer(buf, config) then
+-- @param source_buf integer real file buffer
+-- @param config Plugin config
+-- @param view_buf integer|nil visible buffer (defaults to source_buf)
+local function prepare_prompt_buffer_for_fullscreen(source_buf, config, view_buf)
+  if not is_plugin_prompt_file_buffer(source_buf, config) then
     return
   end
+
+  view_buf = live_view_for_source(source_buf, view_buf)
 
   local skip_prompt = function(b)
     return is_plugin_prompt_file_buffer(b, config)
   end
 
-  local replacement = util.find_or_create_restore_buffer(buf, skip_prompt)
-  replace_prompt_in_open_windows(buf, replacement)
+  local replacement = util.find_or_create_restore_buffer(source_buf, skip_prompt)
+  swap_prompt_windows_for_view(source_buf, view_buf, replacement)
 end
 
 -- Expose history dir path for other modules
@@ -298,7 +352,8 @@ local function current_buffer_text(buf)
 end
 
 -- Send buffered text to whichever terminal is currently active and report success.
-local function send_to_active_terminal(text, source_buf, config, success_message, target_id)
+-- @param view_buf integer|nil visible buffer for close-after-send window swap
+local function send_to_active_terminal(text, source_buf, config, success_message, target_id, view_buf)
   local active_id = target_id or tabs.get_active()
   if not active_id or not terminal.is_running(active_id) then
     return
@@ -306,23 +361,26 @@ local function send_to_active_terminal(text, source_buf, config, success_message
   local sent = terminal.send_text(text, active_id)
   if sent then
     util.notify(success_message or "Sent current file contents to terminal", vim.log.levels.INFO)
-    close_sent_prompt_buffer_if_needed(source_buf, config)
+    close_sent_prompt_buffer_if_needed(source_buf, config, view_buf)
   end
 end
 
 -- Create a fresh terminal (via picker) and send `text` to it once it boots.
 -- @param display_mode string|nil "split" (default) or "fullscreen"
 -- @param name string|nil optional terminal name
-local function pick_create_and_send(config, text, source_buf, success_message, display_mode, name)
+-- @param view_buf integer|nil visible buffer for fullscreen prepare / close-after-send
+local function pick_create_and_send(config, text, source_buf, success_message, display_mode, name, view_buf)
   picker.pick_command(config, function(cmd)
     if not cmd then return end
     if display_mode == "fullscreen" then
-      prepare_prompt_buffer_for_fullscreen(source_buf, config)
+      prepare_prompt_buffer_for_fullscreen(source_buf, config, view_buf)
+      -- Prepare already tore down / swapped the view; ignore for deferred close.
+      view_buf = source_buf
     end
 
     tabs.create_terminal(name, config, cmd, display_mode)
     vim.defer_fn(function()
-      send_to_active_terminal(text, source_buf, config, success_message)
+      send_to_active_terminal(text, source_buf, config, success_message, nil, view_buf)
     end, 200)
   end)
 end
@@ -331,19 +389,24 @@ end
 -- Soft mode: no warnings; returns nil when empty or non-file (used by create-maybe-send).
 -- Strict mode: warns and aborts on non-file or empty buffers (used by :PTSend).
 -- Unnamed buffers with content are persisted to prompt history first.
+-- Resolves virtual views (e.g. markdown-table-wrap Reader) to the Source buffer
+-- so buftype/path/content come from the real file, not the rendered scratch.
+-- Also returns view_bufnr so close/fullscreen can swap the visible window.
 -- @param config Plugin config
 -- @param opts table|nil { soft = boolean }
--- @return buf, text|nil  or nil, nil when there is nothing sendable
+-- @return source_buf, text, view_buf  or nil, nil, nil when there is nothing sendable
 local function current_file_text(config, opts)
   opts = opts or {}
   local soft = opts.soft == true
-  local buf = vim.api.nvim_get_current_buf()
+  local loc = util.resolve_file_location()
+  local buf = loc.source_bufnr
+  local view_buf = loc.view_bufnr
 
   if vim.bo[buf].buftype ~= "" then
     if not soft then
       util.notify("Current buffer is not a normal file buffer", vim.log.levels.WARN)
     end
-    return nil, nil
+    return nil, nil, nil
   end
 
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
@@ -351,17 +414,17 @@ local function current_file_text(config, opts)
     if not soft then
       util.notify("Current buffer is empty — nothing to send", vim.log.levels.WARN)
     end
-    return nil, nil
+    return nil, nil, nil
   end
 
-  local path = vim.api.nvim_buf_get_name(buf)
+  local path = loc.path
   if path == nil or path == "" then
     local new_path = persist_unnamed_buffer_to_history(buf, lines, config)
     if not new_path then
-      return nil, nil
+      return nil, nil, nil
     end
     util.notify("Saved new buffer as " .. new_path, vim.log.levels.INFO)
-    return buf, table.concat(lines, "\n") .. "\n"
+    return buf, table.concat(lines, "\n") .. "\n", view_buf
   end
 
   if vim.bo[buf].modified then
@@ -369,7 +432,7 @@ local function current_file_text(config, opts)
       vim.cmd("write")
     end)
   end
-  return buf, current_buffer_text(buf)
+  return buf, current_buffer_text(buf), view_buf
 end
 
 -- Send current buffer's file contents to the active terminal.
@@ -378,19 +441,19 @@ end
 -- Saves the current buffer if modified so the file exists on disk for the CLI.
 -- @param config Plugin config (for terminal/tabs)
 function M.send_prompt_file_to_terminal(config)
-  local source_buf, text_to_send = current_file_text(config)
+  local source_buf, text_to_send, view_buf = current_file_text(config)
   if not source_buf then
     return
   end
 
   if not tabs.has_terminals() then
-    pick_create_and_send(config, text_to_send, source_buf)
+    pick_create_and_send(config, text_to_send, source_buf, nil, nil, nil, view_buf)
     return
   end
 
   local last_id = tabs.get_last()
   if not last_id then
-    pick_create_and_send(config, text_to_send, source_buf)
+    pick_create_and_send(config, text_to_send, source_buf, nil, nil, nil, view_buf)
     return
   end
 
@@ -405,7 +468,7 @@ function M.send_prompt_file_to_terminal(config)
   end
 
   vim.defer_fn(function()
-    send_to_active_terminal(text_to_send, source_buf, config, nil, last_id)
+    send_to_active_terminal(text_to_send, source_buf, config, nil, last_id, view_buf)
   end, 100)
 end
 
@@ -415,19 +478,19 @@ end
 -- Saves the current buffer if modified so the file exists on disk for the CLI.
 -- @param config Plugin config (for terminal/tabs)
 function M.send_prompt_file_to_terminal_fullscreen(config)
-  local source_buf, text_to_send = current_file_text(config)
+  local source_buf, text_to_send, view_buf = current_file_text(config)
   if not source_buf then
     return
   end
 
   if not tabs.has_terminals() then
-    pick_create_and_send(config, text_to_send, source_buf, nil, "fullscreen")
+    pick_create_and_send(config, text_to_send, source_buf, nil, "fullscreen", nil, view_buf)
     return
   end
 
   local last_id = tabs.get_last()
   if not last_id then
-    pick_create_and_send(config, text_to_send, source_buf, nil, "fullscreen")
+    pick_create_and_send(config, text_to_send, source_buf, nil, "fullscreen", nil, view_buf)
     return
   end
 
@@ -442,13 +505,15 @@ function M.send_prompt_file_to_terminal_fullscreen(config)
       terminal.show_in_preferred_mode(config, last_id, stored_cmd)
     end
   else
-    prepare_prompt_buffer_for_fullscreen(source_buf, config)
+    prepare_prompt_buffer_for_fullscreen(source_buf, config, view_buf)
+    -- Prepare already tore down / swapped the view; ignore for deferred close.
+    view_buf = source_buf
 
     terminal.toggle_fullscreen(config, last_id, stored_cmd, { force_insert = true })
   end
 
   vim.defer_fn(function()
-    send_to_active_terminal(text_to_send, source_buf, config, nil, last_id)
+    send_to_active_terminal(text_to_send, source_buf, config, nil, last_id, view_buf)
   end, 100)
 end
 
@@ -461,7 +526,7 @@ function M.create_terminal_maybe_send(config, opts)
   local display_mode = opts.display_mode or "split"
   local name = opts.name
 
-  local source_buf, text_to_send = current_file_text(config, { soft = true })
+  local source_buf, text_to_send, view_buf = current_file_text(config, { soft = true })
   if source_buf and text_to_send then
     pick_create_and_send(
       config,
@@ -469,7 +534,8 @@ function M.create_terminal_maybe_send(config, opts)
       source_buf,
       "Sent current file contents to new terminal",
       display_mode,
-      name
+      name,
+      view_buf
     )
     return
   end
