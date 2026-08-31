@@ -343,6 +343,57 @@ function M.map_line_to_source(view_bufnr, lnum)
   return map_line_to_source_with_state(view_bufnr, lnum, reader_state)
 end
 
+-- Map the live view cursor to Source via public mtw APIs already used elsewhere.
+-- `reader.source_position` maps Reader line+column; Float has no column map.
+-- Returns nil when unmapped so callers apply a defined fallback — do not apply
+-- a view byte column to a differently laid-out source line.
+-- @param view_bufnr integer
+-- @param winid integer|nil window that still shows the view
+-- @return { lnum: integer, col: integer }|nil
+function M.map_view_cursor_to_source(view_bufnr, winid)
+  if not view_bufnr or not vim.api.nvim_buf_is_valid(view_bufnr) then
+    return nil
+  end
+  if not winid or not vim.api.nvim_win_is_valid(winid) then
+    return nil
+  end
+  if vim.api.nvim_win_get_buf(winid) ~= view_bufnr then
+    return nil
+  end
+
+  local reader = loaded_mtw_reader()
+  if reader
+    and type(reader.source_position) == "function"
+    and type(reader.is_reader) == "function"
+    and reader.is_reader(view_bufnr)
+  then
+    local pos = reader.source_position(view_bufnr, winid)
+    -- { source_bufnr, lnum, col }
+    if type(pos) == "table" and type(pos[2]) == "number" and type(pos[3]) == "number" then
+      return { lnum = pos[2], col = pos[3] }
+    end
+  end
+
+  return nil
+end
+
+-- True when `buf` is an mtw Reader scratch (replaceable nofile view).
+-- Cheap buffer-var gate first; `reader.is_reader` only if that module is loaded.
+-- @param buf integer
+-- @return boolean
+function M.is_mtw_reader_buffer(buf)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return false
+  end
+  if vim.b[buf].markdown_table_wrap_reader == true then
+    return true
+  end
+  local reader = loaded_mtw_reader()
+  return reader ~= nil
+    and type(reader.is_reader) == "function"
+    and reader.is_reader(buf) == true
+end
+
 -- Resolve path + Source-mapped line range for clipboard / visual / :PTCopyLink.
 -- Prefetches Reader state once so both endpoints share a single get_state deepcopy.
 -- @param line1 integer View start line
@@ -372,6 +423,141 @@ function M.resolve_range_location(line1, line2, bufnr)
     line1 = mapped1,
     line2 = mapped2,
   }
+end
+
+-- True when the window is floating (`relative` is non-empty).
+-- @param win integer
+-- @return boolean
+function M.is_float_window(win)
+  if not win or not vim.api.nvim_win_is_valid(win) then
+    return false
+  end
+  local cfg = vim.api.nvim_win_get_config(win)
+  return cfg.relative and cfg.relative ~= ""
+end
+
+-- True when `win` is in the current tabpage (win_id2win is 0 otherwise).
+-- @param win integer
+-- @return boolean
+function M.win_in_current_tab(win)
+  return win ~= nil
+    and vim.api.nvim_win_is_valid(win)
+    and vim.fn.win_id2win(win) ~= 0
+end
+
+-- True when `win` is a non-float in the current tab that can show a file
+-- buffer: empty buftype (normal file) or an mtw Reader (replaceable view).
+-- Other `nofile` windows (nvim-tree, aerial, trouble, oil, ...), terminals,
+-- help, quickfix, and floats are excluded.
+-- @param win integer
+-- @return boolean
+function M.is_non_terminal_window(win)
+  if not M.win_in_current_tab(win) or M.is_float_window(win) then
+    return false
+  end
+  local buf = vim.api.nvim_win_get_buf(win)
+  if not vim.api.nvim_buf_is_valid(buf) then
+    return false
+  end
+  local bt = vim.bo[buf].buftype
+  if bt == "" then
+    return true
+  end
+  return bt == "nofile" and M.is_mtw_reader_buffer(buf)
+end
+
+-- True when `win` is a non-float in the current tab showing a normal file
+-- buffer (empty buftype). Skips terminals, help, quickfix, and other
+-- non-file windows so callers prefer a real file split over a view/term.
+-- @param win integer
+-- @return boolean
+function M.is_editable_window(win)
+  if not M.is_non_terminal_window(win) then
+    return false
+  end
+  local buf = vim.api.nvim_win_get_buf(win)
+  return vim.bo[buf].buftype == ""
+end
+
+-- Snap a 0-based byte column onto a UTF-8 character boundary of `line`.
+-- nvim_buf_set_text rejects mid-sequence columns; view-byte columns from
+-- Reader/Float (or wrapped lines) can land in the middle of a character.
+-- @param line string
+-- @param col integer|nil
+-- @return integer
+function M.clamp_col_to_char_boundary(line, col)
+  line = line or ""
+  local len = #line
+  col = math.max(0, math.min(tonumber(col) or 0, len))
+  if col == 0 or col == len then
+    return col
+  end
+  -- charidx maps a trailing byte to that character; byteidx is its start.
+  local cidx = vim.fn.charidx(line, col)
+  if type(cidx) == "number" and cidx >= 0 then
+    local bidx = vim.fn.byteidx(line, cidx)
+    if type(bidx) == "number" and bidx >= 0 then
+      return bidx
+    end
+  end
+  -- vim.str_utf_start is 1-based; 0 at a character start, negative if mid-sequence.
+  local start = vim.str_utf_start(line, col + 1)
+  if type(start) == "number" then
+    return col + start
+  end
+  return col
+end
+
+-- Non-floating file window in the current tab displaying `bufnr`, or nil.
+-- Prefers the current window when it already shows the buffer.
+-- @param bufnr integer
+-- @return integer|nil
+function M.window_showing_buffer(bufnr)
+  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+    return nil
+  end
+  local cur = vim.api.nvim_get_current_win()
+  if vim.api.nvim_win_get_buf(cur) == bufnr and M.is_editable_window(cur) then
+    return cur
+  end
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if vim.api.nvim_win_is_valid(win)
+      and vim.api.nvim_win_get_buf(win) == bufnr
+      and M.is_editable_window(win)
+    then
+      return win
+    end
+  end
+  return nil
+end
+
+-- Non-float mount window in the current tabpage, or nil.
+-- Prefers the current window. Includes mtw Reader so a prompt can
+-- split from that view when no normal file split exists; other nofile
+-- plugins are not treated as mount points.
+-- @return integer|nil
+function M.first_non_terminal_window()
+  local cur = vim.api.nvim_get_current_win()
+  if M.is_non_terminal_window(cur) then
+    return cur
+  end
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if M.is_non_terminal_window(win) then
+      return win
+    end
+  end
+  return nil
+end
+
+-- Enable wrap/linebreak/breakindent on a window (Telescope preview).
+-- Plugin requires Neovim 0.11, so nvim_set_option_value is always present.
+function M.apply_wrap(winid)
+  if not winid or not vim.api.nvim_win_is_valid(winid) then
+    return
+  end
+  pcall(vim.api.nvim_set_option_value, "wrap", true, { win = winid })
+  pcall(vim.api.nvim_set_option_value, "linebreak", true, { win = winid })
+  pcall(vim.api.nvim_set_option_value, "breakindent", true, { win = winid })
 end
 
 return M

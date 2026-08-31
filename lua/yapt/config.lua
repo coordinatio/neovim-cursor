@@ -20,6 +20,7 @@ M.defaults = {
     prompt_send_fullscreen = "<leader>aE",  -- Send current file contents to terminal (force fullscreen)
     prompt_history_telescope = "<leader>aH",  -- Open prompt history dir in Telescope
     prompt_last = "<leader>al",      -- Open or switch to last prompt buffer
+    prompt_presets = "<leader>ap",   -- Open preset prompts (Telescope, or vim.ui.select)
     copy_link = "<leader>ac",        -- Copy link (normal: @file, visual: @file:start-end) to unnamed register
   },
 
@@ -27,6 +28,14 @@ M.defaults = {
   history = {
     dir = ".nvim-yapt/history",  -- Relative to CWD
     autosave = true,           -- Save prompt-file buffers to disk when left
+  },
+
+  -- Preset prompt libraries (reusable .md files cloned into history)
+  -- dir nil → resolved in setup() to stdpath("config")/yapt/prompts
+  -- Empty string disables that source.
+  prompts = {
+    dir = nil,                         -- Global library (Neovim config)
+    project_dir = ".nvim-yapt/prompts", -- Relative to CWD
   },
 
   -- Terminal naming configuration
@@ -119,12 +128,27 @@ function M.setup(user_config)
     }
   end
 
-  local cfg = vim.tbl_deep_extend("force", M.defaults, user_config)
+  -- Deepcopy so nested tables are not shared with M.defaults (tbl_deep_extend
+  -- reuses them when the user omits a key; setup then writes prompts.dir).
+  local cfg = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), user_config)
 
   -- If the user didn't explicitly set a command, prefer the dedicated CLI binary
   -- when it exists (common packaging: GUI launcher is `cursor`, CLI is `cursor-agent`).
   if user_config.command == nil and vim.fn.executable("cursor-agent") == 1 then
     cfg.command = "cursor-agent"
+  end
+
+  -- Default global preset library: ~/.config/nvim/yapt/prompts (or stdpath("config")).
+  -- An explicit empty string disables the global source; a relative path is
+  -- resolved against the Neovim config directory.
+  if not user_config.prompts or user_config.prompts.dir == nil then
+    cfg.prompts.dir = vim.fn.stdpath("config") .. "/yapt/prompts"
+  elseif cfg.prompts.dir ~= "" then
+    local dir = vim.fn.expand(cfg.prompts.dir)
+    if vim.fn.isabsolutepath(dir) == 0 then
+      dir = vim.fs.joinpath(vim.fn.stdpath("config"), dir)
+    end
+    cfg.prompts.dir = vim.fs.abspath(dir):gsub("/$", "")
   end
 
   return cfg

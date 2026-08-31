@@ -12,6 +12,7 @@ YAPT gives you a quake-style popup terminal workflow: summon a terminal on deman
 - Manage multiple terminal sessions simultaneously — switch, rename, create
 - Fuzzy finder with live preview of terminal output (Telescope integration)
 - Prompt history — create markdown prompt files, browse with Telescope, send to terminal
+- Preset prompts — reusable `.md` files from Neovim config and the project, picked in Telescope
 - Passthrough mode — send keys directly to TUI apps running inside the terminal
 - Copy `@file` and `@file:start-end` links for use in AI prompts
 - Keyboard-driven — operate terminals without leaving the home row
@@ -26,7 +27,7 @@ YAPT gives you a quake-style popup terminal workflow: summon a terminal on deman
 
 - Neovim >= 0.11.0
 - Any CLI application (opencode, cursor CLI, claude, aider, etc.)
-- Telescope (optional, for fuzzy picker and prompt history browser)
+- Telescope (optional, for fuzzy picker, prompt history, and preset prompts)
 
 ---
 
@@ -101,6 +102,7 @@ Work with multiple terminal sessions for different tasks:
 | `<leader>aE` | Send current file contents to terminal (force fullscreen) |
 | `<leader>aH` | Open prompt history directory in Telescope |
 | `<leader>al` | Open or switch to last prompt file from history |
+| `<leader>ap` | Open preset prompts (Telescope, or vim.ui.select) |
 | `<leader>ac` | Copy `@file` link to clipboard (paste into CLI prompt) |
 | `<leader>i` | Send next key directly to TUI app in terminal |
 
@@ -156,6 +158,42 @@ Prompt-file buffers are automatically saved to disk when you leave them (switch 
 - **Browse history in Telescope**: `:PTHistory` or `<leader>aH`
 - **Open last prompt**: `:PTLast` or `<leader>al`
 
+### Preset Prompts
+
+Keep reusable prompts as markdown files and clone them into history when you need them (the library file is never overwritten).
+
+**Where to put files:**
+
+| Library | Default path |
+|---------|----------------|
+| Global | `~/.config/nvim/yapt/prompts/` (`stdpath("config")/yapt/prompts`) |
+| Project | `${CWD}/.nvim-yapt/prompts/` |
+
+Nested folders work: `review/pr.md` shows as `review/pr.md`. Project entries are listed first and tagged `project` or `global`. Same name in both libraries appears twice.
+
+If you gitignore `.nvim-yapt/*` (recommended for draft history), allow the project library so teammates can share prompts:
+
+```
+.nvim-yapt/*
+!.nvim-yapt/prompts/
+!.nvim-yapt/prompts/**
+```
+
+Or set `prompts.project_dir` to a committed path.
+
+**Pick a preset:** `:PTPresets` or `<leader>ap`
+
+| Key | Action |
+|-----|--------|
+| Enter | Clone into a **new** prompt-history file and open **that copy** (the library file is never opened). From a file or Reader window this **replaces the current buffer**; from a terminal or explorer it opens a split. Edit, then `<leader>ae` to send |
+| `<C-x>` / `<C-v>` / `<C-t>` | Same clone, opened in a horizontal split / vertical split / new tab |
+| `<C-s>` | **Send immediately** to the terminal (shown / force-insert) and keep a history copy. The source buffer is not closed or replaced. |
+| `<C-y>` | **Insert** the preset at the cursor in the current file buffer |
+
+`<C-y>` is used instead of `<C-i>` because `<C-i>` is Tab in Neovim and would steal Tab in the picker. Without Telescope, `vim.ui.select` is used with Enter-only (clone then open the copy the same way Enter does).
+
+If both directories are empty, YAPT notifies the paths to add files to (it does not create them).
+
 ---
 
 ## Commands
@@ -172,7 +210,7 @@ Prompt-file buffers are automatically saved to disk when you leave them (switch 
 | `:PTRename [name]` | Rename active terminal (interactive if no argument) |
 | `:PTList` | List all terminals with status |
 
-### Prompt History
+### Prompt History and Presets
 
 | Command | Action |
 |---------|--------|
@@ -181,6 +219,7 @@ Prompt-file buffers are automatically saved to disk when you leave them (switch 
 | `:PTSendFullscreen` | Send current file contents to active terminal (force fullscreen) |
 | `:PTHistory` | Open prompt history directory in Telescope |
 | `:PTLast` | Open or switch to last prompt file from history |
+| `:PTPresets` | Open preset prompts (Telescope, or vim.ui.select) |
 
 ### Utilities
 
@@ -212,12 +251,20 @@ require("yapt").setup({
     prompt_send_fullscreen = "<leader>aE", -- Send current file to terminal (force fullscreen)
     prompt_history_telescope = "<leader>aH", -- Open prompt history in Telescope
     prompt_last            = "<leader>al", -- Open or switch to last prompt buffer
+    prompt_presets         = "<leader>ap", -- Open preset prompts (Telescope, or vim.ui.select)
     copy_link              = "<leader>ac", -- Copy @file or @file:start-end link
   },
 
   history = {
     dir = ".nvim-yapt/history",  -- Relative to CWD
     autosave = true,           -- Save prompt-file buffers to disk when left
+  },
+
+  prompts = {
+    -- nil → stdpath("config")/yapt/prompts (typically ~/.config/nvim/yapt/prompts)
+    -- Empty string disables that source.
+    dir = nil,
+    project_dir = ".nvim-yapt/prompts", -- Relative to CWD
   },
 
   terminal = {
@@ -421,9 +468,10 @@ Use descriptive names to organize by task:
 
 For the best experience, install [telescope.nvim](https://github.com/nvim-telescope/telescope.nvim). With Telescope you get:
 - **Terminal picker** (`<F6>`): live preview, fuzzy search by name, rename with `<C-r>`
-- **Prompt history** (`<leader>aH`): browse `.nvim-yapt/history/` with `find_files`
+- **Prompt history** (`<leader>aH`): browse `.nvim-yapt/history/` with wrap preview
+- **Preset prompts** (`<leader>ap`): global + project libraries, wrap preview, `<C-s>` send, `<C-y>` insert
 
-Without Telescope, the picker falls back to `vim.ui.select`. The history command shows a warning if Telescope is not available.
+Without Telescope, terminal and command pickers fall back to `vim.ui.select`. The history command shows a warning if Telescope is not available. Preset prompts fall back to `vim.ui.select` (Enter clones into history; extra actions require Telescope).
 
 ---
 

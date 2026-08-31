@@ -284,18 +284,159 @@ function M.history_dir_path(config)
   return history_dir_path(config)
 end
 
+-- Exact buffer whose name is `path` (`nvim_buf_get_name` vs `:p`).
+-- Unanchored bufnr(path) is a file-name pattern and can hit the wrong buffer.
+-- @param path string
+-- @return integer|nil
+local function buffer_with_path(path)
+  if not path or path == "" then
+    return nil
+  end
+  local abs = vim.fn.fnamemodify(path, ":p")
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_valid(buf) then
+      local name = vim.api.nvim_buf_get_name(buf)
+      if name ~= "" and vim.fn.fnamemodify(name, ":p") == abs then
+        return buf
+      end
+    end
+  end
+  return nil
+end
+
+local function loaded_buffer_with_path(path)
+  local buf = buffer_with_path(path)
+  if buf and vim.api.nvim_buf_is_loaded(buf) then
+    return buf
+  end
+  return nil
+end
+
+-- True when `fullpath` is already used on disk or as a buffer name.
+-- Unsaved :PTPrompt buffers are named YYYY-MM-DD_HH-MM-SS.md but are not
+-- filereadable; treating only disk files as taken would collide with them.
+-- uv.fs_stat is Neovim's fileexists equivalent (any inode, including
+-- unreadable files that filereadable misses). Buffer identity is exact
+-- (nvim_buf_get_name / bufexists), never unanchored bufnr().
+local function history_path_taken(fullpath)
+  local abs = vim.fn.fnamemodify(fullpath, ":p")
+  if vim.uv.fs_stat(fullpath) ~= nil or vim.uv.fs_stat(abs) ~= nil then
+    return true
+  end
+  if buffer_with_path(fullpath) then
+    return true
+  end
+  return vim.fn.bufexists(fullpath) == 1 or vim.fn.bufexists(abs) == 1
+end
+
 -- Build a unique timestamped history file path (.md), guarding against
 -- same-second collisions by appending _1, _2, ... before the extension.
 -- Collision-suffixed names still parse via parse_timestamp_from_filename.
-local function unique_history_path(dir)
+-- `extra_taken` is always treated as occupied (e.g. a colliding path
+-- unique_history_path would otherwise re-pick).
+local function unique_history_path(dir, extra_taken)
   local base = os.date("%Y-%m-%d_%H-%M-%S")
   local fullpath = dir .. "/" .. base .. ".md"
   local counter = 1
-  while vim.fn.filereadable(fullpath) == 1 do
+  while history_path_taken(fullpath) or fullpath == extra_taken do
     fullpath = dir .. "/" .. base .. "_" .. counter .. ".md"
     counter = counter + 1
   end
   return fullpath
+end
+
+-- If a loaded buffer already uses `path`, bufadd/bufload would reuse it
+-- (bufload is a no-op) and show that buffer's text instead of the file.
+-- Relocate a just-written file (or pick a free name) until the name is free.
+-- Never returns a path a loaded buffer still owns (fail rather than collide).
+-- @return string|nil path that no loaded buffer owns, or nil on failure
+local function avoid_loaded_history_buffer(path)
+  if not loaded_buffer_with_path(path) then
+    return path
+  end
+
+  local dir = vim.fn.fnamemodify(path, ":h")
+  local dest = unique_history_path(dir, path)
+  if dest == path or loaded_buffer_with_path(dest) then
+    return nil
+  end
+
+  if vim.fn.filereadable(path) ~= 1 then
+    -- Named but not on disk (empty :PTPrompt): open under the free name.
+    return dest
+  end
+
+  if vim.fn.rename(path, dest) == 0 and vim.fn.filereadable(dest) == 1 then
+    return dest
+  end
+  local copied = pcall(function()
+    vim.fn.writefile(vim.fn.readfile(path), dest)
+  end)
+  if copied and vim.fn.filereadable(dest) == 1 then
+    -- Leave the colliding path empty on disk so the unsaved buffer's
+    -- autosave cannot overwrite the relocated clone.
+    pcall(vim.fn.delete, path)
+    return dest
+  end
+  return nil
+end
+
+-- Create the history directory if needed. Returns the path, or nil on failure.
+-- Shared by write_prompt_file (clone/send) and empty :PTPrompt (named buffer,
+-- unwritten until save — do not write an empty file here).
+-- @return string|nil
+local function ensure_history_dir(config)
+  local dir = history_dir_path(config)
+  pcall(vim.fn.mkdir, dir, "p")
+  if vim.fn.isdirectory(dir) ~= 1 then
+    util.notify("Failed to create history directory: " .. dir, vim.log.levels.ERROR)
+    return nil
+  end
+  return dir
+end
+
+-- Write a new timestamped prompt-history file without opening it.
+-- @param lines string[] file lines (may be empty)
+-- @return string|nil full path of the created file, or nil on failure
+function M.write_prompt_file(config, lines)
+  config = config or {}
+  lines = lines or {}
+  local dir = ensure_history_dir(config)
+  if not dir then
+    return nil
+  end
+
+  -- Choose a name no loaded buffer owns, then write. Writing first and
+  -- relocating later can leave clone bytes at `fullpath` while an unsaved
+  -- :PTPrompt still owns that name (autosave would overwrite the clone).
+  local fullpath = unique_history_path(dir)
+  if loaded_buffer_with_path(fullpath) then
+    local dest = unique_history_path(dir, fullpath)
+    if dest == fullpath or loaded_buffer_with_path(dest) then
+      util.notify("Failed to write history file: " .. fullpath, vim.log.levels.ERROR)
+      return nil
+    end
+    fullpath = dest
+  end
+
+  local wrote = pcall(vim.fn.writefile, lines, fullpath)
+  if not wrote or vim.fn.filereadable(fullpath) ~= 1 then
+    util.notify("Failed to write history file: " .. fullpath, vim.log.levels.ERROR)
+    return nil
+  end
+  -- unique_history_path already skipped buffers; relocate if a loaded
+  -- buffer still owns this name so later bufload cannot reuse it.
+  local dest = avoid_loaded_history_buffer(fullpath)
+  if not dest then
+    -- Relocate failed; do not leave clone bytes on a path a loaded
+    -- buffer still owns.
+    if loaded_buffer_with_path(fullpath) then
+      pcall(vim.fn.delete, fullpath)
+    end
+    util.notify("Failed to write history file: " .. fullpath, vim.log.levels.ERROR)
+    return nil
+  end
+  return dest
 end
 
 -- Persist an unnamed/new buffer to a fresh prompt-history file, converting
@@ -304,18 +445,8 @@ end
 -- @param lines string[] buffer lines to write (computed once by the caller)
 -- @return string|nil full path of the created file, or nil on failure
 local function persist_unnamed_buffer_to_history(buf, lines, config)
-  local dir = history_dir_path(config)
-  vim.fn.mkdir(dir, "p")
-  if vim.fn.isdirectory(dir) ~= 1 then
-    util.notify("Failed to create history directory: " .. dir, vim.log.levels.ERROR)
-    return nil
-  end
-
-  local fullpath = unique_history_path(dir)
-
-  local wrote = pcall(vim.fn.writefile, lines, fullpath)
-  if not wrote or vim.fn.filereadable(fullpath) ~= 1 then
-    util.notify("Failed to write history file: " .. fullpath, vim.log.levels.ERROR)
+  local fullpath = M.write_prompt_file(config, lines)
+  if not fullpath then
     return nil
   end
 
@@ -331,15 +462,361 @@ local function persist_unnamed_buffer_to_history(buf, lines, config)
   return fullpath
 end
 
--- Create a new prompt file in history dir and open it in the current window
+-- Hide a fullscreen YAPT terminal in the current tab so the restored
+-- file window can be split from. Looks at every window in the tab,
+-- not only the current one (sidebar + fullscreen would otherwise skip
+-- hide and split the sidebar). The restored file is not an in-place
+-- mount: the origin was a terminal/explorer, so the caller still splits.
+-- Split terminals are not hidden:
+-- nvim_win_hide does not create a file window, and can succeed while
+-- leaving no mount (help/qf/explorer still there) with the terminal gone.
+-- @return string|nil hidden terminal id (restore if open still cannot proceed)
+-- @return integer|nil window that held the fullscreen terminal
+local function hide_fullscreen_mount()
+  if not terminal.is_fullscreen_in_current_tab() then
+    return nil, nil
+  end
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if vim.api.nvim_win_is_valid(win) then
+      local id = terminal.id_for_buf(vim.api.nvim_win_get_buf(win))
+      if id and terminal.is_fullscreen_in_current_tab(id) then
+        terminal.hide(id)
+        return id, win
+      end
+    end
+  end
+  return nil, nil
+end
+
+-- Re-show a fullscreen terminal hidden for an in-tab open. Must take
+-- over `win` (the window that was hidden), not nvim_get_current_win():
+-- after :new / :vnew / :tabnew the current window is the leftover split.
+local function restore_fullscreen_mount(id, win)
+  if not id then
+    return
+  end
+  if win and vim.api.nvim_win_is_valid(win) then
+    pcall(vim.api.nvim_set_current_win, win)
+  end
+  pcall(terminal.show_fullscreen, id)
+end
+
+-- Drop an empty unnamed file buffer that no window shows (placeholder
+-- from open_edit_split / :tabnew after the prompt is mounted).
+local function wipe_orphaned_placeholder(buf)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+  if vim.api.nvim_buf_get_name(buf) ~= ""
+    or vim.bo[buf].modified
+    or vim.bo[buf].buftype ~= ""
+  then
+    return
+  end
+  if #vim.fn.win_findbuf(buf) > 0 then
+    return
+  end
+  pcall(vim.api.nvim_buf_delete, buf, { force = true })
+end
+
+-- New split showing an unlisted empty file buffer, so the prompt can mount
+-- without stealing term.win or an explorer. Never opens into a float.
+-- From a sidebar/terminal/leftover float, split relative to a sibling
+-- file/Reader window (do not replace that buffer, and do not split the
+-- explorer or the float). A float is never a mount: only fail when this
+-- tab has no file/Reader window at all.
+-- @param vertical boolean|nil true = vertical split (Telescope <C-v> / :vnew)
+-- @return integer|nil new window id
+local function open_edit_split(vertical)
+  local cur = vim.api.nvim_get_current_win()
+  if not vim.api.nvim_win_is_valid(cur) then
+    return nil
+  end
+
+  -- Prefer a sibling file/Reader when `cur` is nvim-tree / aerial / a
+  -- terminal / leftover float; fall back to `cur` when this tab has no
+  -- such window and `cur` itself can be split.
+  local split_from = util.first_non_terminal_window()
+  if not split_from then
+    if util.is_float_window(cur) then
+      return nil
+    end
+    split_from = cur
+  end
+
+  -- Unlisted (not scratch): scratch sets buftype=nofile and is not a mount.
+  local buf = vim.api.nvim_create_buf(false, false)
+  if not buf or buf == 0 then
+    return nil
+  end
+
+  -- :split fallback may :wincmd to split_from. Restore `cur` on every
+  -- failure so the caller never mounts into that sibling file window.
+  local function abort_split()
+    if vim.api.nvim_buf_is_valid(buf) then
+      pcall(vim.api.nvim_buf_delete, buf, { force = true })
+    end
+    if vim.api.nvim_win_is_valid(cur) then
+      pcall(vim.api.nvim_set_current_win, cur)
+    end
+    return nil
+  end
+
+  -- Match :new / :vnew (Telescope <C-x> / <C-v>): honor 'splitbelow' /
+  -- 'splitright'.
+  local split_dir, split_fallback
+  if vertical then
+    split_dir = vim.o.splitright and "right" or "left"
+    split_fallback = "vsplit"
+  else
+    split_dir = vim.o.splitbelow and "below" or "above"
+    split_fallback = "split"
+  end
+  local ok, new_win = pcall(vim.api.nvim_open_win, buf, true, {
+    split = split_dir,
+    win = split_from,
+  })
+  if ok and type(new_win) == "number" and vim.api.nvim_win_is_valid(new_win) then
+    return new_win
+  end
+
+  if split_from ~= vim.api.nvim_get_current_win()
+    and vim.api.nvim_win_is_valid(split_from)
+  then
+    pcall(vim.api.nvim_set_current_win, split_from)
+  end
+  ok = pcall(vim.cmd, split_fallback)
+  if ok then
+    local win = vim.api.nvim_get_current_win()
+    if vim.api.nvim_win_is_valid(win) and win ~= split_from then
+      pcall(vim.api.nvim_win_set_buf, win, buf)
+      return win
+    end
+  end
+
+  return abort_split()
+end
+
+-- True when the current window is a non-float file/Reader mount.
+local function current_win_is_mount()
+  local win = vim.api.nvim_get_current_win()
+  return not util.is_float_window(win) and util.is_non_terminal_window(win)
+end
+
+-- Leave mtw Float views and hide a fullscreen YAPT terminal before mounting
+-- a normal file buffer. Reuse the current window when it is already a
+-- file/Reader mount. Never jump to a sibling file window (that replaces
+-- the user's code buffer from a terminal or explorer). Never put a normal
+-- buffer in a float, and never replace a YAPT terminal in-place.
+-- After hiding fullscreen, the restored file window is not "already
+-- editing": the origin was a terminal/explorer/float, so the caller must
+-- still split rather than mount in that restored window. Closing an mtw
+-- Float likewise restores Source; capture origin *before* that teardown
+-- or the restored file looks like an in-place mount.
+-- Picker teardown (Telescope / vim.ui.select) happens *before* this
+-- function: focus loss can dismiss an mtw Float, after which Source looks
+-- like an in-place mount. Callers that snapshot at picker-open pass
+-- `must_split` from the captured origin window; do not recompute it from
+-- the current window after the picker.
+-- open_cmd "tabedit" skips origin-tab teardown (float close and fullscreen
+-- hide): a new tab must not close an mtw Float or hide fullscreen in the
+-- origin tab (on abort, show_fullscreen would also take over the leftover
+-- :tabnew window).
+-- @param loc table|nil resolve_file_location() captured by the caller
+-- @param open_cmd string|nil nil | "new" | "vnew" | "tabedit"
+-- @param must_split boolean|nil origin was not a file/Reader mount.
+--   nil = compute from the current window before this function's teardown
+-- @return string|nil hidden fullscreen terminal id
+-- @return integer|nil window that held the fullscreen terminal
+-- @return boolean must_split origin was not a file/Reader mount
+local function ensure_normal_edit_window(loc, open_cmd, must_split)
+  if open_cmd == "tabedit" then
+    return nil, nil, false
+  end
+
+  loc = loc or util.resolve_file_location()
+  local view_buf = loc.view_bufnr
+
+  -- Before float close / fullscreen hide: origin float/terminal/explorer
+  -- must still split after the restored Source looks like a file mount.
+  if must_split == nil then
+    must_split = not current_win_is_mount()
+  end
+
+  if view_buf then
+    util.close_float_view_if_needed(view_buf)
+  end
+
+  if not must_split and current_win_is_mount() then
+    return nil, nil, false
+  end
+
+  local hidden_id, restored_win = hide_fullscreen_mount()
+  if restored_win
+    and vim.api.nvim_win_is_valid(restored_win)
+    and util.is_non_terminal_window(restored_win)
+  then
+    pcall(vim.api.nvim_set_current_win, restored_win)
+  end
+  return hidden_id, restored_win, true
+end
+
+-- Open `path` without :edit (E37 / 'confirm' abort) and without deleting it.
+-- bufadd + bufload, then nvim_win_set_buf on the captured mount window
+-- (FileType hooks can steal the current window). `:hide buffer` in that
+-- window keeps a modified buffer when 'hidden' is off.
+-- May relocate via avoid_loaded_history_buffer; callers must use the
+-- returned path (not the argument) for notify/return.
+-- @param path string
+-- @param loc table|nil
+-- @param open_cmd string|nil nil = mount in current/new split;
+--   "new" | "vnew" | "tabedit" = that split/tab after hide/mount prep
+--   ("tabedit" skips origin-tab teardown so the origin tab is unchanged)
+-- @param origin_must_split boolean|nil snapshot from picker-open;
+--   nil = compute from the current window inside ensure_normal_edit_window
+-- @return string|nil path that was actually opened, or nil on failure
+local function open_prompt_path(path, loc, open_cmd, origin_must_split)
+  local hidden_id, hidden_win, must_split =
+    ensure_normal_edit_window(loc, open_cmd, origin_must_split)
+  local leftover_win = nil
+
+  local function abort_open(reason, created_buf)
+    if leftover_win
+      and vim.api.nvim_win_is_valid(leftover_win)
+      and leftover_win ~= hidden_win
+    then
+      local leftover_buf = vim.api.nvim_win_get_buf(leftover_win)
+      pcall(vim.api.nvim_win_close, leftover_win, true)
+      wipe_orphaned_placeholder(leftover_buf)
+    end
+    restore_fullscreen_mount(hidden_id, hidden_win)
+    if created_buf
+      and vim.api.nvim_buf_is_valid(created_buf)
+      and #vim.fn.win_findbuf(created_buf) == 0
+    then
+      pcall(vim.api.nvim_buf_delete, created_buf, { force = true })
+    end
+    util.notify(
+      "Failed to open prompt file " .. path .. ": " .. reason,
+      vim.log.levels.ERROR
+    )
+    return nil
+  end
+
+  if open_cmd == "tabedit" then
+    -- :tabnew as-is: do not switch to a mount window first (origin-tab
+    -- teardown was skipped; a new tab must not split nvim-tree / a
+    -- terminal in the origin tab).
+    local origin = vim.api.nvim_get_current_win()
+    local ok, err = pcall(vim.cmd, "tabnew")
+    if not ok then
+      return abort_open(tostring(err))
+    end
+    local new_win = vim.api.nvim_get_current_win()
+    if new_win ~= origin then
+      leftover_win = new_win
+    end
+  elseif open_cmd == "new"
+    or open_cmd == "vnew"
+    or must_split
+    or not current_win_is_mount()
+  then
+    -- <C-x> / <C-v> share Enter's explorer-aware split: do not :new /
+    -- :vnew in nvim-tree, aerial, oil, or a split terminal after the
+    -- picker. must_split: origin was terminal/explorer/float *before*
+    -- hide; after hide the restored file looks like a mount; still split.
+    local split = open_edit_split(open_cmd == "vnew")
+    if not split then
+      return abort_open("no suitable window to edit in")
+    end
+    leftover_win = split
+    pcall(vim.api.nvim_set_current_win, split)
+  end
+
+  local win = vim.api.nvim_get_current_win()
+  if util.is_float_window(win) then
+    return abort_open("refusing to edit in a floating window")
+  end
+  if not util.is_non_terminal_window(win) then
+    return abort_open("no suitable window to edit in")
+  end
+
+  local placeholder = vim.api.nvim_win_get_buf(win)
+  -- Do not bufadd/bufload into a loaded buffer that already has this name
+  -- (unsaved :PTPrompt in the same clock second): bump _1, _2, ... first.
+  local resolved = avoid_loaded_history_buffer(path)
+  if not resolved or loaded_buffer_with_path(resolved) then
+    return abort_open("history path is in use by a loaded buffer")
+  end
+  path = resolved
+  local preexisting = buffer_with_path(path)
+  local buf = vim.fn.bufadd(path)
+  if not buf or buf == 0 then
+    return abort_open("bufadd failed")
+  end
+  vim.bo[buf].buflisted = true
+  if not vim.api.nvim_buf_is_loaded(buf) then
+    pcall(vim.fn.bufload, buf)
+  end
+
+  local created = preexisting == nil
+  -- bufload fires BufNew / BufRead / FileType; a markdown hook may steal
+  -- the current window (Reader, outline, preview, wincmd). Mount into `win`.
+  if util.is_float_window(win) then
+    return abort_open("refusing to edit in a floating window", created and buf or nil)
+  end
+  if not util.is_non_terminal_window(win) then
+    return abort_open("no suitable window to edit in", created and buf or nil)
+  end
+
+  local ok, err = pcall(vim.api.nvim_win_set_buf, win, buf)
+  if not ok then
+    -- 'hidden' off + modified buffer in `win` (E37): hide from that window.
+    ok, err = pcall(vim.api.nvim_win_call, win, function()
+      vim.cmd("hide buffer " .. buf)
+    end)
+  end
+  if not ok then
+    return abort_open(tostring(err), created and buf or nil)
+  end
+  pcall(vim.api.nvim_set_current_win, win)
+
+  if placeholder ~= buf then
+    wipe_orphaned_placeholder(placeholder)
+  end
+  return path
+end
+
+-- Create a new prompt file in history dir and open it in a non-float window.
 -- @param config Plugin config (must have history.dir)
-function M.create_prompt_file(config)
+-- @param opts table|nil { lines = string[], location = resolve_file_location(),
+--   open_cmd = nil|"new"|"vnew"|"tabedit",
+--   must_split = boolean|nil origin mount snapshot from picker-open }
+-- @return string|nil full path of the created file, or nil on failure
+function M.create_prompt_file(config, opts)
   config = config or {}
-  local dir = history_dir_path(config)
-  vim.fn.mkdir(dir, "p")
-  local fullpath = unique_history_path(dir)
-  vim.cmd("edit " .. vim.fn.fnameescape(fullpath))
-  util.notify("Created " .. fullpath, vim.log.levels.INFO)
+  opts = opts or {}
+  local fullpath
+  if opts.lines then
+    fullpath = M.write_prompt_file(config, opts.lines)
+    if not fullpath then
+      return nil
+    end
+  else
+    local dir = ensure_history_dir(config)
+    if not dir then
+      return nil
+    end
+    fullpath = unique_history_path(dir)
+  end
+  -- File is already on disk when opts.lines is set; never delete it if
+  -- opening fails (E37 with 'hidden' off, user aborting 'confirm', etc.).
+  local opened = open_prompt_path(fullpath, opts.location, opts.open_cmd, opts.must_split)
+  if not opened then
+    return nil
+  end
+  util.notify("Created " .. opened, vim.log.levels.INFO)
+  return opened
 end
 
 local function current_buffer_text(buf)
@@ -353,14 +830,37 @@ end
 
 -- Send buffered text to whichever terminal is currently active and report success.
 -- @param view_buf integer|nil visible buffer for close-after-send window swap
-local function send_to_active_terminal(text, source_buf, config, success_message, target_id, view_buf)
+-- @param on_success function|nil called after terminal.send_text returns true.
+--   Return false to skip the success notify (hook already reported failure).
+--   Return a string to append to the success message (e.g. a saved history path).
+local function send_to_active_terminal(text, source_buf, config, success_message, target_id, view_buf, on_success)
   local active_id = target_id or tabs.get_active()
-  if not active_id or not terminal.is_running(active_id) then
+  if not active_id then
     return
   end
+  -- Let send_text warn if the job is dead (do not swallow "Terminal is not running").
   local sent = terminal.send_text(text, active_id)
   if sent then
-    util.notify(success_message or "Sent current file contents to terminal", vim.log.levels.INFO)
+    local show_success = true
+    local extra
+    if on_success then
+      local hook_ok, hook_result = pcall(on_success)
+      if not hook_ok then
+        show_success = false
+        util.notify("Sent to terminal, but failed afterwards: " .. tostring(hook_result), vim.log.levels.ERROR)
+      elseif hook_result == false then
+        show_success = false
+      elseif type(hook_result) == "string" and hook_result ~= "" then
+        extra = hook_result
+      end
+    end
+    if show_success then
+      local msg = success_message or "Sent current file contents to terminal"
+      if extra then
+        msg = msg .. " (" .. extra .. ")"
+      end
+      util.notify(msg, vim.log.levels.INFO)
+    end
     close_sent_prompt_buffer_if_needed(source_buf, config, view_buf)
   end
 end
@@ -369,7 +869,8 @@ end
 -- @param display_mode string|nil "split" (default) or "fullscreen"
 -- @param name string|nil optional terminal name
 -- @param view_buf integer|nil visible buffer for fullscreen prepare / close-after-send
-local function pick_create_and_send(config, text, source_buf, success_message, display_mode, name, view_buf)
+-- @param on_success function|nil called after terminal.send_text returns true
+local function pick_create_and_send(config, text, source_buf, success_message, display_mode, name, view_buf, on_success)
   picker.pick_command(config, function(cmd)
     if not cmd then return end
     if display_mode == "fullscreen" then
@@ -380,7 +881,7 @@ local function pick_create_and_send(config, text, source_buf, success_message, d
 
     tabs.create_terminal(name, config, cmd, display_mode)
     vim.defer_fn(function()
-      send_to_active_terminal(text, source_buf, config, success_message, nil, view_buf)
+      send_to_active_terminal(text, source_buf, config, success_message, nil, view_buf, on_success)
     end, 200)
   end)
 end
@@ -435,25 +936,18 @@ local function current_file_text(config, opts)
   return buf, current_buffer_text(buf), view_buf
 end
 
--- Send current buffer's file contents to the active terminal.
--- Ensures at least one terminal exists and shows it (in its preferred
--- display mode, so a fullscreen terminal stays fullscreen), then sends the text.
--- Saves the current buffer if modified so the file exists on disk for the CLI.
--- @param config Plugin config (for terminal/tabs)
-function M.send_prompt_file_to_terminal(config)
-  local source_buf, text_to_send, view_buf = current_file_text(config)
-  if not source_buf then
-    return
-  end
-
+-- Show the last terminal (or create one) and send `text`.
+-- source_buf/view_buf drive close-after-send; pass nil to leave the current buffer.
+-- @param on_success function|nil called after terminal.send_text returns true
+local function show_and_send(config, text, source_buf, view_buf, success_message, on_success)
   if not tabs.has_terminals() then
-    pick_create_and_send(config, text_to_send, source_buf, nil, nil, nil, view_buf)
+    pick_create_and_send(config, text, source_buf, success_message, nil, nil, view_buf, on_success)
     return
   end
 
   local last_id = tabs.get_last()
   if not last_id then
-    pick_create_and_send(config, text_to_send, source_buf, nil, nil, nil, view_buf)
+    pick_create_and_send(config, text, source_buf, success_message, nil, nil, view_buf, on_success)
     return
   end
 
@@ -468,8 +962,40 @@ function M.send_prompt_file_to_terminal(config)
   end
 
   vim.defer_fn(function()
-    send_to_active_terminal(text_to_send, source_buf, config, nil, last_id, view_buf)
+    send_to_active_terminal(text, source_buf, config, success_message, last_id, view_buf, on_success)
   end, 100)
+end
+
+-- Send current buffer's file contents to the active terminal.
+-- Ensures at least one terminal exists and shows it (in its preferred
+-- display mode, so a fullscreen terminal stays fullscreen), then sends the text.
+-- Saves the current buffer if modified so the file exists on disk for the CLI.
+-- @param config Plugin config (for terminal/tabs)
+function M.send_prompt_file_to_terminal(config)
+  local source_buf, text_to_send, view_buf = current_file_text(config)
+  if not source_buf then
+    return
+  end
+  show_and_send(config, text_to_send, source_buf, view_buf, nil)
+end
+
+-- Send arbitrary text to the last/created terminal without treating the
+-- current buffer as a prompt file (no close-after-send).
+-- @param config Plugin config
+-- @param text string
+-- @param opts table|nil { success_message = string, on_success = function }
+--   on_success: return false to skip the success notify; return a string to
+--   append to it (e.g. a saved history path).
+function M.send_text_to_terminal(config, text, opts)
+  opts = opts or {}
+  if not text or vim.trim(text) == "" then
+    util.notify("Nothing to send", vim.log.levels.WARN)
+    return
+  end
+  if not text:match("\n$") then
+    text = text .. "\n"
+  end
+  show_and_send(config, text, nil, nil, opts.success_message or "Sent text to terminal", opts.on_success)
 end
 
 -- Send current buffer's file contents to the active terminal, forcing fullscreen display.
@@ -629,19 +1155,7 @@ function M.open_history_in_telescope(config)
       end
 
       previewers.buffer_previewer_maker(path, self.state.bufnr, { winid = self.state.winid })
-
-      local winid = self.state.winid
-      if winid and vim.api.nvim_win_is_valid(winid) then
-        if vim.api.nvim_set_option_value then
-          pcall(vim.api.nvim_set_option_value, "wrap", true, { win = winid })
-          pcall(vim.api.nvim_set_option_value, "linebreak", true, { win = winid })
-          pcall(vim.api.nvim_set_option_value, "breakindent", true, { win = winid })
-        else
-          pcall(function() vim.wo[winid].wrap = true end)
-          pcall(function() vim.wo[winid].linebreak = true end)
-          pcall(function() vim.wo[winid].breakindent = true end)
-        end
-      end
+      util.apply_wrap(self.state.winid)
     end,
   })
 

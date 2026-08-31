@@ -21,6 +21,7 @@ local terminal = require("yapt.terminal")
 local tabs = require("yapt.tabs")
 local picker = require("yapt.picker")
 local history = require("yapt.history")
+local presets = require("yapt.presets")
 local util = require("yapt.util")
 
 local M = {}
@@ -478,6 +479,12 @@ function M.setup(user_config)
     end, "Open or switch to last prompt file from history")
   end
 
+  if keybindings.prompt_presets and keybindings.prompt_presets ~= "" then
+    set_n(keybindings.prompt_presets, function()
+      presets.open_presets_picker(config)
+    end, "Open preset prompts (Telescope, or vim.ui.select)")
+  end
+
   if keybindings.copy_link and keybindings.copy_link ~= "" then
     set_n(keybindings.copy_link, M.copy_file_link_handler, "Copy @file link to clipboard")
     vim.keymap.set("v", keybindings.copy_link, exit_visual_then(M.copy_link_handler), {
@@ -561,6 +568,10 @@ function M.setup(user_config)
     history.open_last_prompt_buffer(config)
   end, { desc = "Open or switch to last prompt file from history" })
 
+  vim.api.nvim_create_user_command("PTPresets", function()
+    presets.open_presets_picker(config)
+  end, { desc = "Open preset prompts (Telescope, or vim.ui.select)" })
+
   vim.api.nvim_create_user_command("PTCopyLink", function(opts)
     local view_line1 = opts.line1 or vim.api.nvim_win_get_cursor(0)[1]
     local view_line2 = opts.line2 or view_line1
@@ -593,5 +604,6 @@ M.terminal = terminal
 M.tabs = tabs
 M.picker = picker
 M.history = history
+M.presets = presets
 
 return M
