@@ -377,7 +377,8 @@ function M.map_view_cursor_to_source(view_bufnr, winid)
   return nil
 end
 
--- True when `buf` is an mtw Reader scratch (replaceable nofile view).
+-- True when `buf` is an mtw Reader scratch (replaceable view; historically
+-- nofile, acwrite since mtw 0.6 so :write saves Source).
 -- Cheap buffer-var gate first; `reader.is_reader` only if that module is loaded.
 -- @param buf integer
 -- @return boolean
@@ -446,9 +447,10 @@ function M.win_in_current_tab(win)
 end
 
 -- True when `win` is a non-float in the current tab that can show a file
--- buffer: empty buftype (normal file) or an mtw Reader (replaceable view).
--- Other `nofile` windows (nvim-tree, aerial, trouble, oil, ...), terminals,
--- help, quickfix, and floats are excluded.
+-- buffer: empty buftype (normal file) or an mtw Reader (replaceable view;
+-- nofile historically, acwrite since mtw 0.6). Other nofile/acwrite windows
+-- (nvim-tree, aerial, trouble, oil, ...), terminals, help, quickfix, and
+-- floats are excluded. Bare acwrite without the Reader marker is not a mount.
 -- @param win integer
 -- @return boolean
 function M.is_non_terminal_window(win)
@@ -463,7 +465,7 @@ function M.is_non_terminal_window(win)
   if bt == "" then
     return true
   end
-  return bt == "nofile" and M.is_mtw_reader_buffer(buf)
+  return (bt == "nofile" or bt == "acwrite") and M.is_mtw_reader_buffer(buf)
 end
 
 -- True when `win` is a non-float in the current tab showing a normal file
