@@ -395,6 +395,17 @@ function M.is_mtw_reader_buffer(buf)
     and reader.is_reader(buf) == true
 end
 
+-- True when `buf` is vim-fugitive's :Git status (file list for commit).
+-- That view is buftype=nowrite; identity is filetype, not a generic nowrite.
+-- @param buf integer
+-- @return boolean
+function M.is_fugitive_status_buffer(buf)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return false
+  end
+  return vim.bo[buf].filetype == "fugitive"
+end
+
 -- Resolve path + Source-mapped line range for clipboard / visual / :PTCopyLink.
 -- Prefetches Reader state once so both endpoints share a single get_state deepcopy.
 -- @param line1 integer View start line
@@ -447,10 +458,11 @@ function M.win_in_current_tab(win)
 end
 
 -- True when `win` is a non-float in the current tab that can show a file
--- buffer: empty buftype (normal file) or an mtw Reader (replaceable view;
--- nofile historically, acwrite since mtw 0.6). Other nofile/acwrite windows
--- (nvim-tree, aerial, trouble, oil, ...), terminals, help, quickfix, and
--- floats are excluded. Bare acwrite without the Reader marker is not a mount.
+-- buffer: empty buftype (normal file), an mtw Reader (replaceable view;
+-- nofile historically, acwrite since mtw 0.6), or fugitive :Git status
+-- (nowrite). Other nofile/acwrite/nowrite windows (nvim-tree, aerial,
+-- trouble, oil, ...), terminals, help, quickfix, and floats are excluded.
+-- Bare acwrite/nowrite without those markers is not a mount.
 -- @param win integer
 -- @return boolean
 function M.is_non_terminal_window(win)
@@ -465,7 +477,10 @@ function M.is_non_terminal_window(win)
   if bt == "" then
     return true
   end
-  return (bt == "nofile" or bt == "acwrite") and M.is_mtw_reader_buffer(buf)
+  if (bt == "nofile" or bt == "acwrite") and M.is_mtw_reader_buffer(buf) then
+    return true
+  end
+  return bt == "nowrite" and M.is_fugitive_status_buffer(buf)
 end
 
 -- True when `win` is a non-float in the current tab showing a normal file
@@ -534,9 +549,9 @@ function M.window_showing_buffer(bufnr)
 end
 
 -- Non-float mount window in the current tabpage, or nil.
--- Prefers the current window. Includes mtw Reader so a prompt can
--- split from that view when no normal file split exists; other nofile
--- plugins are not treated as mount points.
+-- Prefers the current window. Includes mtw Reader and fugitive :Git
+-- status so a prompt can mount in (or split from) that view when no
+-- normal file split exists; other nofile plugins are not mount points.
 -- @return integer|nil
 function M.first_non_terminal_window()
   local cur = vim.api.nvim_get_current_win()
