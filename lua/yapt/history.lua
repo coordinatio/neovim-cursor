@@ -463,10 +463,12 @@ local function persist_unnamed_buffer_to_history(buf, lines, config)
 end
 
 -- Hide a fullscreen YAPT terminal in the current tab so the restored
--- file window can be split from. Looks at every window in the tab,
+-- file window can be used as a mount. Looks at every window in the tab,
 -- not only the current one (sidebar + fullscreen would otherwise skip
--- hide and split the sidebar). The restored file is not an in-place
--- mount: the origin was a terminal/explorer, so the caller still splits.
+-- hide and split the sidebar). When the origin was that fullscreen
+-- terminal, the restored window is the in-place mount (same as F12).
+-- When the origin was a split terminal, explorer, or float, the
+-- restored file is not an in-place mount: the caller still splits.
 -- Split terminals are not hidden:
 -- nvim_win_hide does not create a file window, and can succeed while
 -- leaving no mount (help/qf/explorer still there) with the terminal gone.
@@ -603,32 +605,44 @@ local function current_win_is_mount()
   return not util.is_float_window(win) and util.is_non_terminal_window(win)
 end
 
+-- True when the current window is a YAPT terminal shown fullscreen here.
+local function current_win_is_fullscreen_terminal()
+  local id = terminal.id_for_buf()
+  return id ~= nil and terminal.is_fullscreen_in_current_tab(id)
+end
+
 -- Leave mtw Float views and hide a fullscreen YAPT terminal before mounting
 -- a normal file buffer. Reuse the current window when it is already a
 -- file/Reader mount. Never jump to a sibling file window (that replaces
 -- the user's code buffer from a terminal or explorer). Never put a normal
 -- buffer in a float, and never replace a YAPT terminal in-place.
--- After hiding fullscreen, the restored file window is not "already
--- editing": the origin was a terminal/explorer/float, so the caller must
--- still split rather than mount in that restored window. Closing an mtw
--- Float likewise restores Source; capture origin *before* that teardown
--- or the restored file looks like an in-place mount.
+-- After hiding fullscreen from a split terminal / explorer / float, the
+-- restored file window is not "already editing": the caller must still
+-- split rather than mount in that restored window. Exception: when the
+-- origin *is* the fullscreen terminal (:PTPrompt / <leader>ah), hide then
+-- mount in the restored window (same as F12). Closing an mtw Float
+-- likewise restores Source; capture origin *before* that teardown or the
+-- restored file looks like an in-place mount.
 -- Picker teardown (Telescope / vim.ui.select) happens *before* this
 -- function: focus loss can dismiss an mtw Float, after which Source looks
 -- like an in-place mount. Callers that snapshot at picker-open pass
 -- `must_split` from the captured origin window; do not recompute it from
--- the current window after the picker.
+-- the current window after the picker. An explicit true keeps splitting
+-- even when origin was a fullscreen terminal.
 -- open_cmd "tabedit" skips origin-tab teardown (float close and fullscreen
 -- hide): a new tab must not close an mtw Float or hide fullscreen in the
 -- origin tab (on abort, show_fullscreen would also take over the leftover
 -- :tabnew window).
 -- @param loc table|nil resolve_file_location() captured by the caller
 -- @param open_cmd string|nil nil | "new" | "vnew" | "tabedit"
--- @param must_split boolean|nil origin was not a file/Reader mount.
+-- @param must_split boolean|nil whether the caller should split after teardown.
 --   nil = compute from the current window before this function's teardown
+--   (false when that window is a fullscreen YAPT terminal; otherwise true
+--   when it is not a file/Reader mount). An explicit value is kept as-is.
 -- @return string|nil hidden fullscreen terminal id
 -- @return integer|nil window that held the fullscreen terminal
--- @return boolean must_split origin was not a file/Reader mount
+-- @return boolean must_split whether the caller should split (false to mount
+--   in the current/restored window, including fullscreen-terminal origin)
 local function ensure_normal_edit_window(loc, open_cmd, must_split)
   if open_cmd == "tabedit" then
     return nil, nil, false
@@ -637,10 +651,16 @@ local function ensure_normal_edit_window(loc, open_cmd, must_split)
   loc = loc or util.resolve_file_location()
   local view_buf = loc.view_bufnr
 
-  -- Before float close / fullscreen hide: origin float/terminal/explorer
-  -- must still split after the restored Source looks like a file mount.
+  -- Before float close / fullscreen hide: origin float / split terminal /
+  -- explorer must still split after the restored Source looks like a file
+  -- mount. Fullscreen YAPT terminal origin is the other way: hide then
+  -- mount in that window unless the caller already snapshotted must_split.
   if must_split == nil then
-    must_split = not current_win_is_mount()
+    if current_win_is_fullscreen_terminal() then
+      must_split = false
+    else
+      must_split = not current_win_is_mount()
+    end
   end
 
   if view_buf then
@@ -658,7 +678,7 @@ local function ensure_normal_edit_window(loc, open_cmd, must_split)
   then
     pcall(vim.api.nvim_set_current_win, restored_win)
   end
-  return hidden_id, restored_win, true
+  return hidden_id, restored_win, must_split
 end
 
 -- Open `path` without :edit (E37 / 'confirm' abort) and without deleting it.
@@ -723,8 +743,9 @@ local function open_prompt_path(path, loc, open_cmd, origin_must_split)
   then
     -- <C-x> / <C-v> share Enter's explorer-aware split: do not :new /
     -- :vnew in nvim-tree, aerial, oil, or a split terminal after the
-    -- picker. must_split: origin was terminal/explorer/float *before*
-    -- hide; after hide the restored file looks like a mount; still split.
+    -- picker. must_split: origin was split terminal/explorer/float
+    -- *before* hide; after hide the restored file looks like a mount;
+    -- still split. False after a fullscreen-terminal origin: mount there.
     local split = open_edit_split(open_cmd == "vnew")
     if not split then
       return abort_open("no suitable window to edit in")
