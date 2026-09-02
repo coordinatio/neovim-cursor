@@ -522,11 +522,12 @@ local function wipe_orphaned_placeholder(buf)
 end
 
 -- New split showing an unlisted empty file buffer, so the prompt can mount
--- without stealing term.win or an explorer. Never opens into a float.
+-- without stealing a protected window. Never opens into a float.
 -- From a sidebar/terminal/leftover float, split relative to a sibling
--- file/Reader window (do not replace that buffer, and do not split the
--- explorer or the float). A float is never a mount: only fail when this
--- tab has no file/Reader window at all.
+-- file (ordinary file first, then pinned/preview) or other mount; do not
+-- replace that buffer, and do not split the sidebar when a file exists.
+-- A float is never a mount: only fail when this tab has no split ancestor
+-- and `cur` itself is a float.
 -- @param vertical boolean|nil true = vertical split (Telescope <C-v> / :vnew)
 -- @return integer|nil new window id
 local function open_edit_split(vertical)
@@ -535,9 +536,9 @@ local function open_edit_split(vertical)
     return nil
   end
 
-  -- Prefer a sibling file/Reader when `cur` is nvim-tree / aerial / a
-  -- terminal / leftover float; fall back to `cur` when this tab has no
-  -- such window and `cur` itself can be split.
+  -- Prefer a sibling ordinary file, then pinned/preview, then help/oil,
+  -- when `cur` is a sidebar/terminal; fall back to `cur` when this tab
+  -- has no such window and `cur` itself can be split.
   local split_from = util.first_non_terminal_window()
   if not split_from then
     if util.is_float_window(cur) then
@@ -546,7 +547,8 @@ local function open_edit_split(vertical)
     split_from = cur
   end
 
-  -- Unlisted (not scratch): scratch sets buftype=nofile and is not a mount.
+  -- Unlisted empty file buffer (not scratch): scratch sets buftype=nofile,
+  -- and wipe_orphaned_placeholder only drops unnamed file buffers.
   local buf = vim.api.nvim_create_buf(false, false)
   if not buf or buf == 0 then
     return nil
@@ -599,30 +601,90 @@ local function open_edit_split(vertical)
   return abort_split()
 end
 
--- True when the current window is a non-float file/Reader mount.
+-- True when the current window may be replaced by a prompt.
 local function current_win_is_mount()
-  local win = vim.api.nvim_get_current_win()
-  return not util.is_float_window(win) and util.is_non_terminal_window(win)
+  return util.is_non_terminal_window(vim.api.nvim_get_current_win())
 end
 
--- True when the current window is a YAPT terminal shown fullscreen here.
-local function current_win_is_fullscreen_terminal()
-  local id = terminal.id_for_buf()
-  return id ~= nil and terminal.is_fullscreen_in_current_tab(id)
+-- Split unless `win` may be replaced in-place. False for a YAPT
+-- fullscreen terminal (hide, then mount in the restored file window,
+-- including when that file has winfix/preview). True for any other
+-- protected window (float, split terminal, winfix sidebar, pinned file).
+-- False for ordinary editor views (file, Reader, fugitive, …).
+-- After hide, ensure_normal_edit_window may still split: a restored
+-- winfix sidebar or winfixbuf window cannot take the prompt.
+-- @param win integer|nil nil = current window
+-- @return boolean
+function M.must_split_from_window(win)
+  win = win or vim.api.nvim_get_current_win()
+  if not win or not vim.api.nvim_win_is_valid(win) then
+    return true
+  end
+  local id = terminal.id_for_buf(vim.api.nvim_win_get_buf(win))
+  if id and terminal.is_fullscreen_in_current_tab(id) then
+    return false
+  end
+  return util.is_protected_window(win)
+end
+
+-- True when `win` may receive the prompt buffer. Floats, terminals, and
+-- winfixbuf are always refused (E1513). A file with winfixwidth/height/
+-- preview is allowed (fullscreen hide into the restored file, same as F12;
+-- also a split/tab the plugin just created, even if WinNew pinned it). A
+-- winfix sidebar (nvim-tree, aerial, …) is not a file and is refused; the
+-- caller splits instead of aborting.
+-- @param win integer
+-- @return boolean
+local function window_accepts_prompt(win)
+  if not win or not vim.api.nvim_win_is_valid(win) then
+    return false
+  end
+  if util.is_float_window(win) or not util.win_in_current_tab(win) then
+    return false
+  end
+  local buf = vim.api.nvim_win_get_buf(win)
+  if not vim.api.nvim_buf_is_valid(buf) or vim.bo[buf].buftype == "terminal" then
+    return false
+  end
+  if vim.wo[win].winfixbuf then
+    return false
+  end
+  return util.is_non_terminal_window(win) or util.is_editable_window(win)
+end
+
+-- Drop 'previewwindow' on a prompt destination so :pclose / CTRL-W z
+-- does not close it. Vim sets 'winfixheight' with the preview UI; clear
+-- that too so the prompt is not stuck at 'previewheight'. Leave
+-- winfixwidth/height on a pinned file that is not a preview window.
+-- @param win integer
+local function clear_preview_destination(win)
+  if not win or not vim.api.nvim_win_is_valid(win) then
+    return
+  end
+  if not vim.wo[win].previewwindow then
+    return
+  end
+  pcall(vim.api.nvim_set_option_value, "previewwindow", false, { win = win })
+  pcall(vim.api.nvim_set_option_value, "winfixheight", false, { win = win })
 end
 
 -- Leave mtw Float views and hide a fullscreen YAPT terminal before mounting
 -- a normal file buffer. Reuse the current window when it is already a
--- file/Reader mount. Never jump to a sibling file window (that replaces
--- the user's code buffer from a terminal or explorer). Never put a normal
--- buffer in a float, and never replace a YAPT terminal in-place.
--- After hiding fullscreen from a split terminal / explorer / float, the
--- restored file window is not "already editing": the caller must still
--- split rather than mount in that restored window. Exception: when the
--- origin *is* the fullscreen terminal (:PTPrompt / <leader>ah), hide then
--- mount in the restored window (same as F12). Closing an mtw Float
--- likewise restores Source; capture origin *before* that teardown or the
--- restored file looks like an in-place mount.
+-- mount. Never jump to a sibling file window (that replaces the user's
+-- code buffer from a terminal or explorer). Never put a normal buffer in
+-- a float, and never replace a terminal in-place.
+-- After hiding fullscreen from a protected origin (split terminal /
+-- sidebar / float), the restored file window is not "already editing":
+-- the caller must still split rather than mount in that restored window.
+-- Exception: when the origin *is* the fullscreen terminal (:PTPrompt /
+-- <leader>ah), hide then mount in the restored window (same as F12),
+-- even if that file window has winfix/preview. Winfix/preview still
+-- mean must_split when they are the *origin* (pinned file → split).
+-- A restored winfix sidebar or winfixbuf window is not that exception:
+-- upgrade must_split so the caller splits rather than stealing the tree
+-- or hitting E1513.
+-- Closing an mtw Float likewise restores Source; capture origin *before*
+-- that teardown or the restored file looks like an in-place mount.
 -- Picker teardown (Telescope / vim.ui.select) happens *before* this
 -- function: focus loss can dismiss an mtw Float, after which Source looks
 -- like an in-place mount. Callers that snapshot at picker-open pass
@@ -638,7 +700,7 @@ end
 -- @param must_split boolean|nil whether the caller should split after teardown.
 --   nil = compute from the current window before this function's teardown
 --   (false when that window is a fullscreen YAPT terminal; otherwise true
---   when it is not a file/Reader mount). An explicit value is kept as-is.
+--   when the window is protected). An explicit value is kept as-is.
 -- @return string|nil hidden fullscreen terminal id
 -- @return integer|nil window that held the fullscreen terminal
 -- @return boolean must_split whether the caller should split (false to mount
@@ -652,15 +714,11 @@ local function ensure_normal_edit_window(loc, open_cmd, must_split)
   local view_buf = loc.view_bufnr
 
   -- Before float close / fullscreen hide: origin float / split terminal /
-  -- explorer must still split after the restored Source looks like a file
+  -- sidebar must still split after the restored Source looks like a file
   -- mount. Fullscreen YAPT terminal origin is the other way: hide then
   -- mount in that window unless the caller already snapshotted must_split.
   if must_split == nil then
-    if current_win_is_fullscreen_terminal() then
-      must_split = false
-    else
-      must_split = not current_win_is_mount()
-    end
+    must_split = M.must_split_from_window()
   end
 
   if view_buf then
@@ -674,9 +732,26 @@ local function ensure_normal_edit_window(loc, open_cmd, must_split)
   local hidden_id, restored_win = hide_fullscreen_mount()
   if restored_win
     and vim.api.nvim_win_is_valid(restored_win)
-    and util.is_non_terminal_window(restored_win)
+    and not util.is_float_window(restored_win)
   then
-    pcall(vim.api.nvim_set_current_win, restored_win)
+    -- must_split false: hide-then-mount in this window (same as F12) when
+    -- it is a file, even with winfix/preview. must_split true: jump if the
+    -- restored window is a file or other mount, so the following split is
+    -- relative to it rather than a leftover sidebar.
+    if not must_split
+      or util.is_non_terminal_window(restored_win)
+      or util.is_editable_window(restored_win)
+    then
+      pcall(vim.api.nvim_set_current_win, restored_win)
+    end
+  end
+  -- Fullscreen origin keeps must_split false only when the restored window
+  -- can take the prompt. A restored winfix sidebar or winfixbuf window
+  -- must still split (do not abort-and-restore-fullscreen).
+  if not must_split
+    and not window_accepts_prompt(vim.api.nvim_get_current_win())
+  then
+    must_split = true
   end
   return hidden_id, restored_win, must_split
 end
@@ -723,6 +798,15 @@ local function open_prompt_path(path, loc, open_cmd, origin_must_split)
     return nil
   end
 
+  -- In-place mount: origin was not protected, or was a fullscreen YAPT
+  -- terminal whose restored window can take the prompt (must_split false).
+  -- Destination checks use window_accepts_prompt (file with winfix/preview
+  -- allowed): do not re-apply the origin denylist after hide or on a
+  -- split/tab the plugin just created (WinNew may pin the new window).
+  -- ensure_normal_edit_window already upgraded must_split when hide
+  -- restored a winfix sidebar or winfixbuf window, so those still split
+  -- instead of aborting. Explicit <C-x>/<C-v>/<C-t> and a protected
+  -- origin still split/tab.
   if open_cmd == "tabedit" then
     -- :tabnew as-is: do not switch to a mount window first (origin-tab
     -- teardown was skipped; a new tab must not split nvim-tree / a
@@ -736,16 +820,14 @@ local function open_prompt_path(path, loc, open_cmd, origin_must_split)
     if new_win ~= origin then
       leftover_win = new_win
     end
-  elseif open_cmd == "new"
-    or open_cmd == "vnew"
-    or must_split
-    or not current_win_is_mount()
-  then
-    -- <C-x> / <C-v> share Enter's explorer-aware split: do not :new /
-    -- :vnew in nvim-tree, aerial, oil, or a split terminal after the
-    -- picker. must_split: origin was split terminal/explorer/float
-    -- *before* hide; after hide the restored file looks like a mount;
-    -- still split. False after a fullscreen-terminal origin: mount there.
+  elseif open_cmd == "new" or open_cmd == "vnew" or must_split then
+    -- <C-x> / <C-v> share Enter's split: do not :new / :vnew in a
+    -- protected window (terminal, sidebar, leftover float) after the
+    -- picker. must_split: origin was protected *before* hide, or hide
+    -- restored a winfix sidebar / winfixbuf window. After hide the
+    -- restored file can look like a mount; still split. False after a
+    -- fullscreen-terminal origin whose restored window can take the
+    -- prompt: mount there.
     local split = open_edit_split(open_cmd == "vnew")
     if not split then
       return abort_open("no suitable window to edit in")
@@ -758,7 +840,7 @@ local function open_prompt_path(path, loc, open_cmd, origin_must_split)
   if util.is_float_window(win) then
     return abort_open("refusing to edit in a floating window")
   end
-  if not util.is_non_terminal_window(win) then
+  if not window_accepts_prompt(win) then
     return abort_open("no suitable window to edit in")
   end
 
@@ -786,9 +868,17 @@ local function open_prompt_path(path, loc, open_cmd, origin_must_split)
   if util.is_float_window(win) then
     return abort_open("refusing to edit in a floating window", created and buf or nil)
   end
-  if not util.is_non_terminal_window(win) then
+  if not window_accepts_prompt(win) then
     return abort_open("no suitable window to edit in", created and buf or nil)
   end
+
+  -- Strip preview UI before set_buf so BufWinEnter does not see the
+  -- prompt as a preview buffer. Restore on failure so a failed mount
+  -- does not leave :pedit without 'previewwindow'. After success, strip
+  -- again (WinNew / FileType may have set the flag on a new split/tab).
+  local was_preview = vim.wo[win].previewwindow
+  local preview_winfixheight = vim.wo[win].winfixheight
+  clear_preview_destination(win)
 
   local ok, err = pcall(vim.api.nvim_win_set_buf, win, buf)
   if not ok then
@@ -798,9 +888,19 @@ local function open_prompt_path(path, loc, open_cmd, origin_must_split)
     end)
   end
   if not ok then
+    if was_preview and vim.api.nvim_win_is_valid(win) then
+      pcall(vim.api.nvim_set_option_value, "previewwindow", true, { win = win })
+      pcall(
+        vim.api.nvim_set_option_value,
+        "winfixheight",
+        preview_winfixheight,
+        { win = win }
+      )
+    end
     return abort_open(tostring(err), created and buf or nil)
   end
   pcall(vim.api.nvim_set_current_win, win)
+  clear_preview_destination(win)
 
   if placeholder ~= buf then
     wipe_orphaned_placeholder(placeholder)

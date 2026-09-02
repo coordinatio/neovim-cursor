@@ -185,7 +185,7 @@ Or set `prompts.project_dir` to a committed path.
 
 | Key | Action |
 |-----|--------|
-| Enter | Clone into a **new** prompt-history file and open **that copy** (the library file is never opened). From a file or Reader window this **replaces the current buffer**; from a terminal or explorer it opens a split. Edit, then `<leader>ae` to send |
+| Enter | Clone into a **new** prompt-history file and open **that copy** (the library file is never opened). From a non-protected view (ordinary file, Reader, help, oil, …) this **replaces the current buffer**. From a protected window it opens a split: float, terminal, cmdwin, quickfix, prompt, preview, or any window with `winfixwidth`/`winfixheight`/`winfixbuf` (a pinned file, not only a sidebar). Edit, then `<leader>ae` to send |
 | `<C-x>` / `<C-v>` / `<C-t>` | Same clone, opened in a horizontal split / vertical split / new tab |
 | `<C-s>` | **Send immediately** to the terminal (shown / force-insert) and keep a history copy. The source buffer is not closed or replaced. |
 | `<C-y>` | **Insert** the preset at the cursor in the current file buffer |

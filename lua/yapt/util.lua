@@ -377,35 +377,6 @@ function M.map_view_cursor_to_source(view_bufnr, winid)
   return nil
 end
 
--- True when `buf` is an mtw Reader scratch (replaceable view; historically
--- nofile, acwrite since mtw 0.6 so :write saves Source).
--- Cheap buffer-var gate first; `reader.is_reader` only if that module is loaded.
--- @param buf integer
--- @return boolean
-function M.is_mtw_reader_buffer(buf)
-  if not buf or not vim.api.nvim_buf_is_valid(buf) then
-    return false
-  end
-  if vim.b[buf].markdown_table_wrap_reader == true then
-    return true
-  end
-  local reader = loaded_mtw_reader()
-  return reader ~= nil
-    and type(reader.is_reader) == "function"
-    and reader.is_reader(buf) == true
-end
-
--- True when `buf` is vim-fugitive's :Git status (file list for commit).
--- That view is buftype=nowrite; identity is filetype, not a generic nowrite.
--- @param buf integer
--- @return boolean
-function M.is_fugitive_status_buffer(buf)
-  if not buf or not vim.api.nvim_buf_is_valid(buf) then
-    return false
-  end
-  return vim.bo[buf].filetype == "fugitive"
-end
-
 -- Resolve path + Source-mapped line range for clipboard / visual / :PTCopyLink.
 -- Prefetches Reader state once so both endpoints share a single get_state deepcopy.
 -- @param line1 integer View start line
@@ -457,43 +428,61 @@ function M.win_in_current_tab(win)
     and vim.fn.win_id2win(win) ~= 0
 end
 
--- True when `win` is a non-float in the current tab that can show a file
--- buffer: empty buftype (normal file), an mtw Reader (replaceable view;
--- nofile historically, acwrite since mtw 0.6), or fugitive :Git status
--- (nowrite). Other nofile/acwrite/nowrite windows (nvim-tree, aerial,
--- trouble, oil, ...), terminals, help, quickfix, and floats are excluded.
--- Bare acwrite/nowrite without those markers is not a mount.
+-- True when a prompt must not replace this window as origin: float, any
+-- terminal job, command-line window (E11), prompt/quickfix buftype,
+-- previewwindow, or any window with winfixwidth/height/buf (pinned file,
+-- sidebar, winfixbuf). Plugin identity (Reader, fugitive, oil, …) is
+-- not consulted; help/oil without those flags remain replaceable.
+-- @param win integer
+-- @return boolean
+function M.is_protected_window(win)
+  if not win or not vim.api.nvim_win_is_valid(win) then
+    return true
+  end
+  if M.is_float_window(win) then
+    return true
+  end
+  -- getcmdwintype is session-global; only the current window is the cmdwin.
+  if vim.fn.getcmdwintype() ~= "" and win == vim.api.nvim_get_current_win() then
+    return true
+  end
+  local buf = vim.api.nvim_win_get_buf(win)
+  if not vim.api.nvim_buf_is_valid(buf) then
+    return true
+  end
+  local bt = vim.bo[buf].buftype
+  if bt == "terminal" or bt == "prompt" or bt == "quickfix" then
+    return true
+  end
+  return vim.wo[win].winfixwidth
+    or vim.wo[win].winfixheight
+    or vim.wo[win].winfixbuf
+    or vim.wo[win].previewwindow
+end
+
+-- True when `win` is in the current tab and a prompt may replace it
+-- (normal file, Reader, fugitive status, oil, help, …). Protected
+-- windows (float, terminal, cmdwin, prompt/quickfix, winfix/preview)
+-- are excluded.
 -- @param win integer
 -- @return boolean
 function M.is_non_terminal_window(win)
+  return M.win_in_current_tab(win) and not M.is_protected_window(win)
+end
+
+-- True when `win` is a non-float in the current tab showing a normal file
+-- buffer (empty buftype). Independent of the prompt mount denylist: a
+-- pinned or preview file window still counts so window_showing_buffer /
+-- preset insert can find Source. Skips terminals, help, quickfix, and
+-- other non-file windows.
+-- @param win integer
+-- @return boolean
+function M.is_editable_window(win)
   if not M.win_in_current_tab(win) or M.is_float_window(win) then
     return false
   end
   local buf = vim.api.nvim_win_get_buf(win)
-  if not vim.api.nvim_buf_is_valid(buf) then
-    return false
-  end
-  local bt = vim.bo[buf].buftype
-  if bt == "" then
-    return true
-  end
-  if (bt == "nofile" or bt == "acwrite") and M.is_mtw_reader_buffer(buf) then
-    return true
-  end
-  return bt == "nowrite" and M.is_fugitive_status_buffer(buf)
-end
-
--- True when `win` is a non-float in the current tab showing a normal file
--- buffer (empty buftype). Skips terminals, help, quickfix, and other
--- non-file windows so callers prefer a real file split over a view/term.
--- @param win integer
--- @return boolean
-function M.is_editable_window(win)
-  if not M.is_non_terminal_window(win) then
-    return false
-  end
-  local buf = vim.api.nvim_win_get_buf(win)
-  return vim.bo[buf].buftype == ""
+  return vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].buftype == ""
 end
 
 -- Snap a 0-based byte column onto a UTF-8 character boundary of `line`.
@@ -548,22 +537,33 @@ function M.window_showing_buffer(bufnr)
   return nil
 end
 
--- Non-float mount window in the current tabpage, or nil.
--- Prefers the current window. Includes mtw Reader and fugitive :Git
--- status so a prompt can mount in (or split from) that view when no
--- normal file split exists; other nofile plugins are not mount points.
+-- Window to split relative to when the prompt must not replace the origin.
+-- Winfix/preview mean "do not replace", not "do not split from". Rank:
+-- ordinary file (editable, not protected) > pinned/preview file > help/
+-- oil/scratch (other non-protected mounts). Sidebars/terminals/floats/
+-- cmdwin/quickfix are skipped so the caller can fall back to splitting `cur`.
 -- @return integer|nil
 function M.first_non_terminal_window()
   local cur = vim.api.nvim_get_current_win()
-  if M.is_non_terminal_window(cur) then
-    return cur
-  end
-  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-    if M.is_non_terminal_window(win) then
-      return win
+  local wins = vim.api.nvim_tabpage_list_wins(0)
+  local function first(pred)
+    if pred(cur) then
+      return cur
     end
+    for _, win in ipairs(wins) do
+      if pred(win) then
+        return win
+      end
+    end
+    return nil
   end
-  return nil
+  return first(function(win)
+    return M.is_editable_window(win) and not M.is_protected_window(win)
+  end) or first(function(win)
+    return M.is_editable_window(win)
+  end) or first(function(win)
+    return M.is_non_terminal_window(win)
+  end)
 end
 
 -- Enable wrap/linebreak/breakindent on a window (Telescope preview).

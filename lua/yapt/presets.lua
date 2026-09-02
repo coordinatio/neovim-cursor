@@ -609,13 +609,13 @@ function M.open_presets_picker(config)
   -- view is still live: Telescope closing an mtw Float (or focus loss)
   -- can clear float_rendered, after which rematching uses the raw view
   -- line and lands at column 0 on the wrong Source line.
-  -- Snapshot mount status from that same origin window: picker teardown
-  -- can dismiss an mtw Float, after which Source looks like an in-place
-  -- mount and Enter would replace the user's file.
+  -- Snapshot protected/fullscreen status from that same origin window:
+  -- picker teardown can dismiss an mtw Float, after which Source looks
+  -- like an in-place mount and Enter would replace the user's file.
   local loc = util.resolve_file_location()
   local winid = vim.api.nvim_get_current_win()
   local cursor = vim.api.nvim_win_get_cursor(winid)
-  local must_split = not util.is_non_terminal_window(winid)
+  local must_split = history.must_split_from_window(winid)
   local view_buf = loc.view_bufnr
   if view_buf and view_buf ~= loc.source_bufnr then
     local mapped = util.map_view_cursor_to_source(view_buf, winid)
